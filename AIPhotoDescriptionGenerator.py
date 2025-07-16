@@ -2,12 +2,10 @@
 AI Photo Description Generator
 Программа для генерации описаний фотографий через LLM API
 
-Версия: 2.0.0
-- Добавлена функция переименования (копирования) файлов на основе AI-описаний.
-- Автоматическое определение пути для сохранения переименованных файлов.
-- Обработка конфликтов имен файлов.
-- Добавлена иконка для копирования лога.
-- UI/UX адаптирован под новый функционал.
+Версия: 2.1.1
+- Исправлена критическая ошибка кодировки в OpenCV при чтении файлов
+  с кириллическими символами в пути. `cv2.imread` заменен на связку
+  `np.fromfile` и `cv2.imdecode` для корректной работы с Unicode.
 """
 
 import tkinter as tk
@@ -15,7 +13,7 @@ from tkinter import ttk, filedialog, scrolledtext, messagebox
 import os
 import sqlite3
 from datetime import datetime
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ExifTags
 import cv2
 import numpy as np
 import threading
@@ -31,7 +29,7 @@ import shutil
 from collections import Counter
 
 # Версия программы
-VERSION = "2.0.0"
+VERSION = "2.1.1"
 
 # Подавляем предупреждения от Pillow о некорректных JPEG
 warnings.filterwarnings("ignore", message=".*Invalid SOS parameters.*")
@@ -55,6 +53,22 @@ try:
     import google.generativeai as genai
 except ImportError:
     genai = None
+
+
+def correct_image_orientation(image: Image.Image) -> Image.Image:
+    """Применяет поворот к изображению PIL на основе его EXIF-данных."""
+    try:
+        exif = image.getexif()
+        orientation_tag = next((k for k, v in ExifTags.TAGS.items() if v == 'Orientation'), None)
+
+        if orientation_tag in exif:
+            orientation = exif[orientation_tag]
+            if orientation == 3: image = image.rotate(180, expand=True)
+            elif orientation == 6: image = image.rotate(270, expand=True)
+            elif orientation == 8: image = image.rotate(90, expand=True)
+    except (AttributeError, KeyError, IndexError):
+        pass # Игнорируем ошибки, если EXIF отсутствует или некорректен
+    return image
 
 
 class EditDescriptionDialog(tk.Toplevel):
@@ -82,6 +96,7 @@ class EditDescriptionDialog(tk.Toplevel):
         else:
             image = Image.open(image_path)
         
+        image = correct_image_orientation(image) # Коррекция ориентации
         image.thumbnail((300, 200), Image.Resampling.LANCZOS)
         photo = ImageTk.PhotoImage(image)
         
@@ -312,6 +327,7 @@ class AIPhotoDescriptor:
         ttk.Radiobutton(processed_frame, text="Пропускать", variable=self.processed_mode, value="skip").pack(anchor=tk.W)
         ttk.Radiobutton(processed_frame, text="Обрабатывать заново", variable=self.processed_mode, value="process").pack(anchor=tk.W)
         ttk.Radiobutton(processed_frame, text="Спрашивать", variable=self.processed_mode, value="ask").pack(anchor=tk.W)
+        ttk.Radiobutton(processed_frame, text="Если нет описания", variable=self.processed_mode, value="if_empty").pack(anchor=tk.W)
         
         control_frame = ttk.Frame(parent)
         control_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
@@ -435,6 +451,7 @@ class AIPhotoDescriptor:
     def display_image(self, image_path):
         try:
             image = Image.open(image_path)
+            image = correct_image_orientation(image) # Применяем коррекцию
             self.image_label.update_idletasks()
             w, h = self.image_label.winfo_width(), self.image_label.winfo_height()
             if w <= 1 or h <= 1: w, h = 500, 500
@@ -471,6 +488,7 @@ class AIPhotoDescriptor:
     def get_image_base64(self, image_path):
         try:
             with Image.open(image_path) as img:
+                img = correct_image_orientation(img) # Коррекция перед отправкой в API
                 if img.mode not in ('RGB', 'L'): img = img.convert('RGB')
                 max_size = 2048
                 if img.width > max_size or img.height > max_size:
@@ -577,7 +595,17 @@ class AIPhotoDescriptor:
 
     def show_edit_dialog_main(self, data):
         image_path, short_desc, long_desc, callback = data
-        image_data = cv2.imread(image_path)
+        try:
+            # ИСПРАВЛЕНИЕ: Используем np.fromfile для корректной работы с Unicode-путями
+            n = np.fromfile(image_path, np.uint8)
+            image_data = cv2.imdecode(n, cv2.IMREAD_COLOR)
+            if image_data is None: # Проверка, что изображение успешно декодировано
+                raise IOError("OpenCV не смог декодировать изображение из файла.")
+        except Exception as e:
+            self.log(f"!!! ОШИБКА OpenCV: Не удалось прочитать файл {image_path}: {e}")
+            # Показываем диалог без картинки, если чтение не удалось
+            image_data = None 
+        
         dialog = EditDescriptionDialog(self.root, image_path, short_desc, long_desc, image_data)
         self.root.wait_window(dialog)
         callback(dialog.result)
@@ -597,7 +625,7 @@ class AIPhotoDescriptor:
     def is_image_processed(self, image_id):
         with sqlite3.connect(self.db_path.get()) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT 1 FROM images WHERE id = ? AND ai_short_description IS NOT NULL", (image_id,))
+            cursor.execute("SELECT 1 FROM images WHERE id = ? AND ai_short_description IS NOT NULL AND ai_short_description != ''", (image_id,))
             return cursor.fetchone() is not None
 
     def start_action_thread(self, target_func, *args):
@@ -613,11 +641,27 @@ class AIPhotoDescriptor:
 
     def process_images_thread(self):
         try:
+            # Логика выбора изображений перенесена сюда
             with sqlite3.connect(self.db_path.get()) as conn:
-                images = conn.execute('SELECT id, filepath FROM images ORDER BY id').fetchall()
-            
+                cursor = conn.cursor()
+                mode = self.processed_mode.get()
+                
+                if mode == "if_empty":
+                    self.log("Выбран режим 'Если нет описания'. Поиск необработанных изображений...")
+                    # Выбираем только те, у кого описание NULL или пустое
+                    query = "SELECT id, filepath FROM images WHERE ai_short_description IS NULL OR ai_short_description = '' ORDER BY id"
+                    images = cursor.execute(query).fetchall()
+                else:
+                    self.log("Сканирование всех изображений в базе данных...")
+                    query = 'SELECT id, filepath FROM images ORDER BY id'
+                    images = cursor.execute(query).fetchall()
+
             total = len(images)
-            self.log(f"Найдено изображений в БД: {total}")
+            self.log(f"Найдено изображений для обработки: {total}")
+            if total == 0:
+                self.end_action_thread("Нет изображений для обработки.", "complete")
+                return
+
             self.processed_decision_for_all = None
             
             for i, (image_id, image_path) in enumerate(images):
@@ -629,8 +673,9 @@ class AIPhotoDescriptor:
                 self.log(f"\nОбработка: {os.path.basename(image_path)}")
                 self.update_image(image_path)
                 
+                # Эта проверка нужна для режимов 'skip', 'process', 'ask'
                 decision = 'process'
-                if self.is_image_processed(image_id):
+                if self.processed_mode.get() != "if_empty" and self.is_image_processed(image_id):
                     mode = self.processed_decision_for_all or self.processed_mode.get()
                     if mode == 'skip': decision = 'skip'
                     elif mode == 'ask':
@@ -701,10 +746,10 @@ class AIPhotoDescriptor:
         try:
             os.makedirs(dest_dir, exist_ok=True)
             with sqlite3.connect(self.db_path.get()) as conn:
-                images = conn.execute('SELECT filepath, ai_short_description, filename FROM images').fetchall()
+                images = conn.execute('SELECT filepath, ai_short_description, filename FROM images WHERE ai_short_description IS NOT NULL AND ai_short_description != ""').fetchall()
 
             total = len(images)
-            self.log(f"Найдено {total} файлов для копирования/переименования.")
+            self.log(f"Найдено {total} файлов с описаниями для копирования/переименования.")
             copied, skipped = 0, 0
 
             for i, (original_path, short_desc, original_filename) in enumerate(images):
@@ -716,20 +761,15 @@ class AIPhotoDescriptor:
                     skipped += 1
                     continue
 
-                base_name, extension = os.path.splitext(original_filename)
-
-                if short_desc:
-                    new_base_name = self.sanitize_filename(self.transliterate(short_desc))
-                    new_filename = f"{new_base_name}{extension}"
-                    new_path = os.path.join(dest_dir, new_filename)
-                    
-                    counter = 1
-                    while os.path.exists(new_path):
-                        counter += 1
-                        new_filename = f"{new_base_name}_({counter}){extension}"
-                        new_path = os.path.join(dest_dir, new_filename)
-                else:
-                    new_filename = f"{base_name}_no_AI_name{extension}"
+                _, extension = os.path.splitext(original_filename)
+                new_base_name = self.sanitize_filename(self.transliterate(short_desc))
+                new_filename = f"{new_base_name}{extension}"
+                new_path = os.path.join(dest_dir, new_filename)
+                
+                counter = 1
+                while os.path.exists(new_path):
+                    counter += 1
+                    new_filename = f"{new_base_name}_({counter}){extension}"
                     new_path = os.path.join(dest_dir, new_filename)
                 
                 shutil.copy2(original_path, new_path)
