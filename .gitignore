@@ -1,0 +1,16 @@
+# Database files 
+*.db 
+*.sqlite 
+*.sqlite3 
+*.pt
+ 
+# Configuration with sensitive data 
+*.ini 
+ 
+
+# Python 
+__pycache__/ 
+ 
+# OS 
+.DS_Store 
+Thumbs.db 

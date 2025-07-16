@@ -1,0 +1,6 @@
+[Keys]
+
+# keys without quotation marks
+OpenAI = <OpenAI key>
+ANTHROPIC = <ANTHROPIC key>
+GEMINI = <GEMINI key>
