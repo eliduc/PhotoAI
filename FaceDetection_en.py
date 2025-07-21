@@ -1,12 +1,12 @@
 """
-Face Detection v3.9en
+Face Detection v3.9.1en
 A program to recognize and catalog people and dogs in photographs.
 
 Version: 3.9en
 - Full translation of the entire user interface, comments, and log messages
   from Russian to English.
 
-Version: 3.9.0
+Version: 3.9
 - Integrated the dog recognition system from DogRecognizerCPU (based on Torchvision).
   - Dog detection is now performed by a Faster R-CNN model, and breed
     classification by DenseNet-121, significantly improving accuracy.
@@ -41,7 +41,7 @@ from torchvision import transforms
 from torchvision.models import detection as tv_det, densenet as tv_cls
 
 # Program Version
-VERSION = "3.9en"
+VERSION = "3.9.1en"
 
 # --- Class to redirect stdout to the log (for the progress bar) ---
 class StdOutRedirector:
@@ -817,12 +817,58 @@ class FaceDetectionV2:
         callback(dialog.result, dialog.apply_to_all)
 
     def create_or_update_person(self, result, conn):
-        cursor = conn.cursor(); now = datetime.now().isoformat(); person_id = None
+        """
+        Creates a new or updates an existing record in the `persons` table 
+        and returns the `person_id`. After a successful addition, it places 
+        a `'refresh_people'` event into the `update_queue` so that the interface 
+        immediately displays the new person.
+
+        """
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        person_id = None
+
+        # 1. «Save as Known» из Face‑диалога
         if result['action'] == 'new_known':
-            cursor.execute('INSERT INTO persons (is_known, full_name, short_name, notes, created_date, updated_date) VALUES (1, ?, ?, ?, ?, ?)', (result['full_name'], result['short_name'], result['notes'], now, now)); person_id = cursor.lastrowid; self.log(f"  Created new person: {result['full_name']}")
+            cursor.execute(
+                'INSERT INTO persons (is_known, full_name, short_name, notes, created_date, updated_date) '
+                'VALUES (1, ?, ?, ?, ?, ?)',
+                (result['full_name'], result['short_name'], result['notes'], now, now)
+            )
+            person_id = cursor.lastrowid
+            self.log(f"  Created new person: {result['full_name']} (ID: {person_id})") # Added ID to log
+            self.update_queue.put(('refresh_people', None))   # <— refreshing the list
+
+        # 2. «Save information» from window Body‑without‑face
+
+        elif result['action'] == 'local_known': # Action "Save Information" from BodyWithoutFaceDialog
+            cursor.execute(
+                'INSERT INTO persons (is_known, full_name, short_name, notes, created_date, updated_date) '
+                'VALUES (1, ?, ?, ?, ?, ?)', 
+                (result['full_name'], result['short_name'], result['notes'], now, now)
+            )
+            person_id = cursor.lastrowid
+            self.log(f"  Created new person (no face): {result['full_name']} (ID: {person_id})") # Added ID to log
+            self.update_queue.put(('refresh_people', None))   
+
+        # 3. «Leave as Unknown» 
         elif result['action'] == 'unknown':
-            cursor.execute('INSERT INTO persons (is_known, created_date, updated_date) VALUES (0, ?, ?)', (now, now)); person_id = cursor.lastrowid; self.log(f"  Added an unknown person (ID: {person_id})")
-        elif result['action'] == 'existing': person_id = result['person_id']
+            cursor.execute(
+                'INSERT INTO persons (is_known, created_date, updated_date) VALUES (0, ?, ?)',
+                (now, now)
+            )
+            person_id = cursor.lastrowid
+            self.log(f"  Added an unknown person (ID: {person_id})")
+
+        # 4. Choice of an existing person
+        elif result['action'] == 'existing':
+            person_id = result['person_id']
+            self.log(f"  Selected existing person (ID: {person_id})")
+        # 5. Choice of an existing person from Reference DB
+        elif result['action'] == 'existing_ref': 
+            pass
+
+
         return person_id
 
     def create_or_update_dog(self, result, conn):
@@ -895,7 +941,7 @@ class FaceDetectionV2:
             match = self.identify_person(person_obj['face_encoding'], self.db_path, main_conn=conn)
             if match and match['id'] not in already_assigned_ids:
                 identified_person_id = match['id']
-                self.log(f"  Recognized (main DB): {match['short_name']}")
+                self.log(f"  Recognized (main DB): {match['short_name']} (ID: {match['id']})")
             
             elif self.ref_db_path:
                 ref_match = self.identify_person(person_obj['face_encoding'], self.ref_db_path)
@@ -906,7 +952,7 @@ class FaceDetectionV2:
                     if dialog_result.get('result', {}).get('confirmed'):
                         person_info_from_ref = dialog_result['result']['person_info']
                         potential_id = self.get_or_create_person_by_name(person_info_from_ref, conn)
-                        if potential_id not in already_assigned_ids:
+                        if potential_id and potential_id not in already_assigned_ids:
                             identified_person_id = potential_id
                         else:
                             self.log(f"  Skipped assignment of '{person_info_from_ref['short_name']}' (ID={potential_id}) as it's already assigned in this photo.")
@@ -927,22 +973,31 @@ class FaceDetectionV2:
             self.update_queue.put(('show_body_dialog', (image, person_obj['bbox'], cb)))
             dialog_event.wait()
             person_result = dialog_result.get('result')
+
             if person_result:
-                if person_result['action'] == 'existing':
-                    if person_result['person_id'] not in already_assigned_ids:
-                        person_obj['person_id'] = person_result['person_id']
-                    else:
-                        self.log(f"  Skipped assignment of ID={person_result['person_id']} as it's already assigned in this photo.")
-                elif person_result['action'] == 'existing_ref':
-                     person_id = self.get_or_create_person_by_name(person_result['person_info'], conn)
-                     if person_id not in already_assigned_ids:
-                        person_obj['person_id'] = person_id
-                     else:
-                        self.log(f"  Skipped assignment of ID={person_id} as it's already assigned in this photo.")
-                elif person_result['action'] == 'local_known':
-                    person_obj.update({'is_locally_identified': True, 'local_full_name': person_result['full_name'], 'local_short_name': person_result['short_name'], 'local_notes': person_result['notes']})
-                elif person_result['action'] == 'unknown':
-                    person_obj['person_id'] = self.create_or_update_person(person_result, conn)
+                action = person_result['action']
+                person_id_to_assign = None
+
+                if action == 'existing':
+                    person_id_to_assign = person_result['person_id']
+                elif action == 'existing_ref':
+                    person_id_to_assign = self.get_or_create_person_by_name(person_result['person_info'], conn)
+                elif action == 'local_known':
+                    person_id_to_assign = self.create_or_update_person(person_result, conn)
+                    person_obj.update({
+                        'is_locally_identified': True,
+                        'local_full_name': person_result['full_name'],
+                        'local_short_name': person_result['short_name'],
+                        'local_notes': person_result['notes']
+                    })
+                elif action == 'unknown':
+                    person_id_to_assign = self.create_or_update_person(person_result, conn)
+
+                # Assign the person_id if a valid ID was obtained and it's not already assigned in this photo
+                if person_id_to_assign is not None and person_id_to_assign not in already_assigned_ids:
+                    person_obj['person_id'] = person_id_to_assign
+                elif person_id_to_assign is not None:
+                    self.log(f"  Skipped assignment of ID={person_id_to_assign} as it's already assigned in this photo.")
         return person_obj
 
     def detect_dogs_torchvision(self, pil_image):
