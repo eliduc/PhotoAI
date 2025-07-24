@@ -522,7 +522,7 @@ class AIPhotoDescriptor:
             for i, (original_path, description) in enumerate(images_to_rename):
                 self.update_queue.put(('progress', (i, total)))
                 if not os.path.exists(original_path): self.update_queue.put(('log', self.lang['file_not_found_skip'].format(path=original_path))); continue
-                file_extension = Path(original_path).suffix; new_filename_base = sanitize_filename(transliterate(description))
+                file_extension = Path(original_path).suffix; new_filename_base = sanitize_filename(description)
                 new_filename = f"{new_filename_base}{file_extension}"; new_filepath = os.path.join(dest_dir, new_filename)
                 counter = 2
                 while os.path.exists(new_filepath): new_filename = f"{new_filename_base}_({counter}){file_extension}"; new_filepath = os.path.join(dest_dir, new_filename); counter += 1
