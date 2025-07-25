@@ -1,7 +1,15 @@
 #
-# Face Database Cleaner GUI v2.1
+# Face Database Cleaner GUI v2.3
 # A graphical application for finding and merging duplicates in a face database,
 # including searching for people by face vector similarity.
+#
+# Version: 2.3
+# - Added Exit button in the bottom right-hand corner of the window.
+# - Updated version number.
+#
+# Version: 2.3
+# - Added Exit button in the bottom right-hand corner of the window.
+# - Updated version number.
 #
 # Version: 2.1
 # - The language selection label is now always in English ("Language:").
@@ -40,7 +48,7 @@ except ImportError:
     messagebox.showerror("Library Missing", "The 'numpy' library is required.\nPlease install it: pip install numpy")
     exit()
 
-VERSION = "2.1"
+VERSION = "2.3"
 
 # --- TRANSLATIONS ---
 # Central dictionary for all UI strings and messages
@@ -602,15 +610,17 @@ class FaceDBCleanerGUI:
         self.header_frame = ttk.Frame(self.main_pane)
         self.header_frame.pack(side=tk.TOP, fill=tk.X, anchor=tk.N, pady=(0, 5))
         
+        # Version label on the right
+        self.version_label = ttk.Label(self.header_frame, text=f"v{VERSION}", font=('Arial', 8, 'italic'))
+        self.version_label.pack(side=tk.RIGHT)
+        
+        # Language selector to the left of version
         self.lang_frame = ttk.Frame(self.header_frame)
-        self.lang_frame.pack(side=tk.LEFT)
+        self.lang_frame.pack(side=tk.RIGHT, padx=(0, 10))
         self.lang_label = ttk.Label(self.lang_frame, text="Language:")
         self.lang_label.pack(side=tk.LEFT, padx=(0, 5))
         self.lang_combo = ttk.Combobox(self.lang_frame, textvariable=self.current_language, values=["ru", "en", "it"], width=5, state="readonly")
         self.lang_combo.pack(side=tk.LEFT)
-
-        self.version_label = ttk.Label(self.header_frame, text=f"v{VERSION}", font=('Arial', 8, 'italic'))
-        self.version_label.pack(side=tk.RIGHT)
 
         # --- DB selection panel ---
         self.db_frame = ttk.LabelFrame(self.main_pane, padding=10)
@@ -661,17 +671,21 @@ class FaceDBCleanerGUI:
         self.start_btn = ttk.Button(control_frame, command=self.start_cleaning, style="Accent.TButton")
         self.start_btn.pack(side=tk.LEFT)
         
-        # Swapped Buttons                               
-        self.exit_btn = ttk.Button(control_frame, command=self.root.destroy)
-        self.exit_btn.pack(side=tk.LEFT, padx=(10,0))
         self.copy_btn = ttk.Button(control_frame, text="📋", command=self.copy_log_to_clipboard)
         self.copy_btn.pack(side=tk.RIGHT)
 
         self.log_text = scrolledtext.ScrolledText(self.log_frame, wrap=tk.WORD, state=tk.DISABLED, relief=tk.SOLID, borderwidth=1)
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
-        self.status_label = ttk.Label(self.root, text="", relief=tk.SUNKEN, anchor=tk.W, style="Idle.Status.TLabel")
-        self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
+        # Bottom frame for status bar and exit button
+        self.bottom_frame = ttk.Frame(self.root)
+        self.bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        self.status_label = ttk.Label(self.bottom_frame, text="", relief=tk.SUNKEN, anchor=tk.W, style="Idle.Status.TLabel")
+        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        self.exit_btn = ttk.Button(self.bottom_frame, command=self.root.destroy)
+        self.exit_btn.pack(side=tk.RIGHT, padx=5, pady=2)
     
     def change_language(self, *args):
         """Called when the language is changed via the combobox."""
@@ -731,9 +745,10 @@ class FaceDBCleanerGUI:
             self.db_path.set(filename)
             self.update_status("status_db_selected", filename=os.path.basename(filename))
 
-    def log(self, key, **kwargs):
+    def log(self, key, prefix="", suffix="", **kwargs):
         message = self.lang[key].format(**kwargs)
-        self.root.after(0, self._log_threadsafe, message)
+        full_message = prefix + message + suffix
+        self.root.after(0, self._log_threadsafe, full_message)
 
     def _log_threadsafe(self, message):
         self.log_text.config(state=tk.NORMAL)
@@ -782,19 +797,19 @@ class FaceDBCleanerGUI:
 
             if any(results.values()):
                 conn.commit()
-                self.log("log_all_changes_saved", key_prefix="\n------------------------------------\n")
+                self.log("log_all_changes_saved", prefix="\n------------------------------------\n")
                 if results['exact_persons'] > 0: self.log("log_merged_people", count=results['exact_persons'])
                 if results['dogs'] > 0: self.log("log_merged_dogs", count=results['dogs'])
                 if results['photos'] > 0: self.log("log_deleted_photos", count=results['photos'])
                 if results['similar_persons'] > 0: self.log("log_merged_similar_people", count=results['similar_persons'])
-                self.log("log_all_changes_saved", key_prefix="------------------------------------") # Just for the line
+                self.log("log_all_changes_saved", prefix="------------------------------------") # Just for the line
                 self.update_status("status_complete")
             else:
-                self.log("log_no_changes_needed", key_prefix="\n------------------------------------\n", key_suffix="\n------------------------------------")
+                self.log("log_no_changes_needed", prefix="\n------------------------------------\n", suffix="\n------------------------------------")
                 self.update_status("status_complete_no_changes")
 
         except Exception as e:
-            self.log("log_error_occurred", e=e, key_prefix="\n")
+            self.log("log_error_occurred", e=e, prefix="\n")
             self.root.after(0, lambda: self.log_text.insert(tk.END, traceback.format_exc()))
             if conn:
                 conn.rollback()
