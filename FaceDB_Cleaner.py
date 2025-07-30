@@ -1,10 +1,19 @@
 #
-# Face Database Cleaner GUI v2.3
+# Face Database Cleaner GUI v2.5
 # A graphical application for finding and merging duplicates in a face database,
 # including searching for people by face vector similarity.
 #
-# Version: 2.3
-# - Added Exit button in the bottom right-hand corner of the window.
+# Version: 2.5
+# - Added "Keep First" and "Keep Last" buttons to the duplicate photos dialog
+#   to allow for quick selection of images to delete in bulk.
+# - Added translations for the new buttons.
+# - Updated version number.
+#
+# Version: 2.4
+# - Added a progress bar for the photo hashing process, which appears only
+#   during this operation to provide visual feedback.
+# - Implemented a function to bring the main window to the foreground after
+#   a task is completed, addressing focus issues on Windows 11.
 # - Updated version number.
 #
 # Version: 2.3
@@ -48,7 +57,7 @@ except ImportError:
     messagebox.showerror("Library Missing", "The 'numpy' library is required.\nPlease install it: pip install numpy")
     exit()
 
-VERSION = "2.3"
+VERSION = "2.5"
 
 # --- TRANSLATIONS ---
 # Central dictionary for all UI strings and messages
@@ -101,6 +110,8 @@ TRANSLATIONS = {
         "dup_photos_no_selection_msg": "Не выбрано ни одного фото для удаления.",
         "dup_photos_confirm_delete_title": "Подтверждение",
         "dup_photos_confirm_delete_msg": "Вы уверены, что хотите НАВСЕГДА удалить файлы с диска?",
+        "keep_first_button": "Оставить первые",
+        "keep_last_button": "Оставить последние",
         "log_photo_search_start": "\n--- Поиск дубликатов фотографий (может занять время) ---",
         "log_hashing_images": "Хеширование {count} изображений...",
         "log_file_not_found": "  ! Файл не найден, пропуск: {filepath}",
@@ -200,6 +211,8 @@ TRANSLATIONS = {
         "dup_photos_no_selection_msg": "No photos were selected for deletion.",
         "dup_photos_confirm_delete_title": "Confirmation",
         "dup_photos_confirm_delete_msg": "Are you sure you want to PERMANENTLY delete the files from disk?",
+        "keep_first_button": "Keep First",
+        "keep_last_button": "Keep Last",
         "log_photo_search_start": "\n--- Searching for duplicate photos (may take a while) ---",
         "log_hashing_images": "Hashing {count} images...",
         "log_file_not_found": "  ! File not found, skipping: {filepath}",
@@ -299,6 +312,8 @@ TRANSLATIONS = {
         "dup_photos_no_selection_msg": "Nessuna foto selezionata per l'eliminazione.",
         "dup_photos_confirm_delete_title": "Conferma",
         "dup_photos_confirm_delete_msg": "Sei sicuro di voler eliminare PERMANENTEMENTE i file dal disco?",
+        "keep_first_button": "Mantieni i Primi",
+        "keep_last_button": "Mantieni gli Ultimi",
         "log_photo_search_start": "\n--- Ricerca di foto duplicate (potrebbe richiedere tempo) ---",
         "log_hashing_images": "Hashing di {count} immagini...",
         "log_file_not_found": "  ! File non trovato, saltato: {filepath}",
@@ -371,6 +386,13 @@ class DuplicatePhotosDialog(tk.Toplevel):
         self.delete_files_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(top_panel, text=self.lang["dup_photos_delete_disk"], variable=self.delete_files_var).pack(side=tk.LEFT)
 
+        # *** NEW: Frame for quick selection buttons ***
+        quick_select_frame = ttk.Frame(top_panel)
+        quick_select_frame.pack(side=tk.RIGHT, padx=10)
+        ttk.Button(quick_select_frame, text=self.lang["keep_first_button"], command=self.select_to_delete_all_but_first).pack(side=tk.LEFT, padx=5)
+        ttk.Button(quick_select_frame, text=self.lang["keep_last_button"], command=self.select_to_delete_all_but_last).pack(side=tk.LEFT)
+
+
         btn_frame = ttk.Frame(self, padding=10)
         btn_frame.pack(fill=tk.X, side=tk.BOTTOM)
         ttk.Button(btn_frame, text=self.lang["dup_photos_confirm_button"], command=self.confirm).pack(side=tk.LEFT, expand=True, fill=tk.X)
@@ -390,6 +412,28 @@ class DuplicatePhotosDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.focus_set()
+
+    # *** NEW: Method to mark all but the first image in each group for deletion ***
+    def select_to_delete_all_but_first(self):
+        for group in self.duplicate_groups:
+            if not group:
+                continue
+            id_to_keep = group[0][0]  # ID of the first image
+            for image_id, _, _, _, _ in group:
+                if image_id in self.checkbox_vars:
+                    cb_var, _ = self.checkbox_vars[image_id]
+                    cb_var.set(image_id != id_to_keep)
+
+    # *** NEW: Method to mark all but the last image in each group for deletion ***
+    def select_to_delete_all_but_last(self):
+        for group in self.duplicate_groups:
+            if not group:
+                continue
+            id_to_keep = group[-1][0] # ID of the last image
+            for image_id, _, _, _, _ in group:
+                if image_id in self.checkbox_vars:
+                    cb_var, _ = self.checkbox_vars[image_id]
+                    cb_var.set(image_id != id_to_keep)
 
     def populate_duplicates(self, parent_frame):
         thumb_size = (150, 150)
@@ -684,6 +728,10 @@ class FaceDBCleanerGUI:
         self.status_label = ttk.Label(self.bottom_frame, text="", relief=tk.SUNKEN, anchor=tk.W, style="Idle.Status.TLabel")
         self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
+        # Progress bar for long operations, initially hidden
+        self.progress_bar = ttk.Progressbar(self.bottom_frame, orient='horizontal', mode='determinate', length=200)
+        # The progress bar will be packed/unpacked on demand by the cleaning functions.
+        
         self.exit_btn = ttk.Button(self.bottom_frame, command=self.root.destroy)
         self.exit_btn.pack(side=tk.RIGHT, padx=5, pady=2)
     
@@ -717,6 +765,9 @@ class FaceDBCleanerGUI:
 
     def update_status(self, key, **kwargs):
         message = self.lang[key].format(**kwargs)
+        self.root.after(0, self._update_status_threadsafe, message, key)
+        
+    def _update_status_threadsafe(self, message, key):
         self.status_label.config(text=message)
         
         style_type = 'idle'
@@ -773,8 +824,35 @@ class FaceDBCleanerGUI:
         self.log_text.config(state=tk.DISABLED)
         self.update_status("status_running")
 
+        # Show progress bar only if photo cleaning is selected
+        if self.clean_photos_var.get():
+            # Pack it before the exit button
+            self.exit_btn.pack_forget()
+            self.progress_bar.pack(side=tk.RIGHT, padx=10, pady=2)
+            self.exit_btn.pack(side=tk.RIGHT, padx=5, pady=2)
+            self.progress_bar['value'] = 0
+
         thread = threading.Thread(target=self.cleaning_thread, args=(db_path_val,), daemon=True)
         thread.start()
+
+    def _bring_to_front(self):
+        """Forces the window to the foreground to address focus issues."""
+        try:
+            self.root.lift()
+            self.root.attributes('-topmost', 1)
+            self.root.update_idletasks() # Ensure commands are processed
+            self.root.attributes('-topmost', 0)
+        except tk.TclError:
+            # This can happen if the window is destroyed before this runs.
+            pass
+
+    def _finalize_ui_state(self):
+        """Resets the UI to its idle state after a task is complete."""
+        self.start_btn.config(state=tk.NORMAL)
+        # Hide the progress bar
+        self.progress_bar.pack_forget()
+        # Bring the window to the front in case it was in the background
+        self._bring_to_front()
 
     def cleaning_thread(self, db_path_val):
         conn = None
@@ -802,7 +880,8 @@ class FaceDBCleanerGUI:
                 if results['dogs'] > 0: self.log("log_merged_dogs", count=results['dogs'])
                 if results['photos'] > 0: self.log("log_deleted_photos", count=results['photos'])
                 if results['similar_persons'] > 0: self.log("log_merged_similar_people", count=results['similar_persons'])
-                self.log("log_all_changes_saved", prefix="------------------------------------") # Just for the line
+                # Using a key that exists for the separator line
+                self.log("log_connecting", db_path="------------------------------------")
                 self.update_status("status_complete")
             else:
                 self.log("log_no_changes_needed", prefix="\n------------------------------------\n", suffix="\n------------------------------------")
@@ -810,7 +889,7 @@ class FaceDBCleanerGUI:
 
         except Exception as e:
             self.log("log_error_occurred", e=e, prefix="\n")
-            self.root.after(0, lambda: self.log_text.insert(tk.END, traceback.format_exc()))
+            self.root.after(0, self._log_threadsafe, traceback.format_exc())
             if conn:
                 conn.rollback()
                 self.update_status("status_error")
@@ -818,19 +897,25 @@ class FaceDBCleanerGUI:
             if conn:
                 conn.close()
             self.is_running = False
-            self.root.after(0, lambda: self.start_btn.config(state=tk.NORMAL))
+            # Schedule all final UI updates to be run in the main thread
+            self.root.after(0, self._finalize_ui_state)
 
     def process_photo_duplicates(self, cursor):
         self.log("log_photo_search_start")
         cursor.execute("SELECT id, filepath, 0, 0, file_size FROM images")
         all_images = cursor.fetchall()
+        
+        # Configure progress bar in the main thread
+        self.root.after(0, lambda: self.progress_bar.config(maximum=len(all_images)))
+
         hashes = {}
         self.log("log_hashing_images", count=len(all_images))
 
         for i, (img_id, filepath, _, _, _) in enumerate(all_images):
             if not os.path.exists(filepath):
                 self.log("log_file_not_found", filepath=filepath)
-                continue
+                self.root.after(0, self.progress_bar.step) # Still step the bar
+                continue # Skip to the next image
             try:
                 with Image.open(filepath) as img:
                     img_hash = imagehash.phash(img)
@@ -839,9 +924,15 @@ class FaceDBCleanerGUI:
                 hashes[img_hash].append(img_id)
             except Exception as e:
                 self.log("log_file_read_error", filepath=filepath, e=e)
-                continue
-            if (i + 1) % 50 == 0:
+            
+            # Update progress bar and status counter
+            self.root.after(0, self.progress_bar.step)
+            # Update the text status less frequently to avoid flooding the event queue
+            if (i + 1) % 25 == 0 or (i + 1) == len(all_images):
                 self.update_status("status_hashing", i=i+1, count=len(all_images))
+        
+        # Reset status from "Hashing..." to "Processing..."
+        self.update_status("status_running")
 
         self.log("log_finding_similar")
         threshold = self.photo_hash_threshold.get()
@@ -862,7 +953,7 @@ class FaceDBCleanerGUI:
                 image_ids_in_group = [img_id for h in current_group_hashes for img_id in hashes[h]]
                 processed_hashes.update(current_group_hashes)
                 placeholders = ','.join('?' * len(image_ids_in_group))
-                cursor.execute(f"SELECT id, filepath, 0, 0, file_size FROM images WHERE id IN ({placeholders})", image_ids_in_group)
+                cursor.execute(f"SELECT id, filepath, 0, 0, file_size / 1024 FROM images WHERE id IN ({placeholders})", image_ids_in_group)
                 groups.append(cursor.fetchall())
 
         if not groups:

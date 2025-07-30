@@ -1,6 +1,11 @@
 """
-Face Vectors Updater v1.3.0
+Face Vectors Updater v1.4
 Program for updating and optimizing face vectors in the database.
+
+Version 1.4:
+- Fixed a bug where control buttons could remain disabled after an operation completed, especially on failure.
+- Refactored UI update logic to be fully thread-safe, centralizing state changes in the main GUI thread.
+- Updated version number.
 
 Version 1.3.0:
 - All code comments translated to English for better international collaboration.
@@ -31,7 +36,7 @@ import threading
 import queue
 from PIL import Image, ExifTags
 
-VERSION = "1.3.0"
+VERSION = "1.4"
 
 # Translations
 TRANSLATIONS = {
@@ -290,6 +295,7 @@ class FaceVectorsUpdater:
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
     def browse_db(self):
+        if self.is_running: return
         filename = filedialog.askopenfilename(
             title=self.tr('select_database'), 
             filetypes=[("SQLite DB", "*.db"), ("All files", "*.*")]
@@ -297,7 +303,8 @@ class FaceVectorsUpdater:
         if filename:
             self.db_path.set(filename)
             self.update_status(self.tr('log_db_selected', path=os.path.basename(filename)), "idle")
-            self.update_queue.put(('toggle_buttons', ('disabled', 'disabled')))
+            # After selecting a DB, only analysis is possible first.
+            self.update_queue.put(('enable_buttons', ('disabled', 'disabled')))
 
     def log(self, message):
         self.update_queue.put(('log', f"{datetime.now().strftime('%H:%M:%S')} - {message}\n"))
@@ -323,9 +330,20 @@ class FaceVectorsUpdater:
                 elif action == 'status': 
                     self.status_bar.config(text=data[0])
                     self.status_bar.config(style=data[1].title()+'.Status.TLabel')
-                elif action == 'toggle_buttons': 
+                elif action == 'enable_buttons': 
                     self.update_btn.config(state=data[0])
                     self.optimize_btn.config(state=data[1])
+                elif action == 'finalize_action':
+                    success = data
+                    self.is_running = False
+                    self.analyze_btn.config(state=tk.NORMAL)
+                    if success:
+                        self.update_btn.config(state=tk.NORMAL)
+                        self.optimize_btn.config(state=tk.NORMAL)
+                    else:
+                        self.update_btn.config(state=tk.DISABLED)
+                        self.optimize_btn.config(state=tk.DISABLED)
+
         except queue.Empty:
             pass
         finally:
@@ -347,10 +365,7 @@ class FaceVectorsUpdater:
         thread.start()
 
     def end_action(self, success=True):
-        self.is_running = False
-        self.analyze_btn.config(state=tk.NORMAL)
-        if success:
-            self.update_queue.put(('toggle_buttons', ('normal', 'normal')))
+        self.update_queue.put(('finalize_action', success))
 
     def analyze_database(self):
         self.update_status(self.tr('status_analyzing'), "processing")
@@ -416,7 +431,6 @@ class FaceVectorsUpdater:
                         try:
                             pil_image = Image.open(image_path)
                             oriented_image = correct_image_orientation(pil_image)
-                            # FIXED: Removed BGR conversion
                             image_np = np.array(oriented_image)
                             
                             face_locations = face_recognition.face_locations(image_np, model='hog')
