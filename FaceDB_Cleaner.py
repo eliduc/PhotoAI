@@ -45,6 +45,7 @@ import json
 import traceback
 from datetime import datetime
 from PIL import Image, ImageTk
+from photo_utils import backup_database, setup_file_logger
 
 try:
     import imagehash
@@ -162,6 +163,7 @@ TRANSLATIONS = {
         "log_merge_cancelled": "Объединение людей отменено или пропущено.",
         "log_performing_merges": "\nВыполнение {count} слияний...",
         "log_merging_ids": "  - Объединение ID {id_d} -> ID {id_k} с именем '{name}'",
+        "log_backup_created": "Резервная копия базы данных создана: {path}",
     },
     "en": {
         "app_title": "FaceDB Cleaner GUI",
@@ -263,6 +265,7 @@ TRANSLATIONS = {
         "log_merge_cancelled": "Merging people was cancelled or skipped.",
         "log_performing_merges": "\nPerforming {count} merges...",
         "log_merging_ids": "  - Merging ID {id_d} -> ID {id_k} with name '{name}'",
+        "log_backup_created": "Database backup created: {path}",
     },
     "it": {
         "app_title": "FaceDB Cleaner GUI",
@@ -364,6 +367,7 @@ TRANSLATIONS = {
         "log_merge_cancelled": "Unione persone annullata o saltata.",
         "log_performing_merges": "\nEsecuzione di {count} unioni...",
         "log_merging_ids": "  - Unione ID {id_d} -> ID {id_k} con nome '{name}'",
+        "log_backup_created": "Backup del database creato: {path}",
     }
 }
 
@@ -641,6 +645,7 @@ class FaceDBCleanerGUI:
         self.clean_similar_faces_var = tk.BooleanVar(value=False)
         self.photo_hash_threshold = tk.IntVar(value=5)
         self.face_similarity_threshold = tk.DoubleVar(value=0.5)
+        self.file_logger = setup_file_logger('FaceDB_Cleaner')
 
         self.create_widgets()
         self.retranslate_ui() # Apply initial translation
@@ -808,6 +813,7 @@ class FaceDBCleanerGUI:
         self.log_text.insert(tk.END, message + "\n")
         self.log_text.config(state=tk.DISABLED)
         self.log_text.see(tk.END)
+        self.file_logger.info(message)
 
     def start_cleaning(self):
         if self.is_running: return
@@ -833,6 +839,10 @@ class FaceDBCleanerGUI:
             self.progress_bar.pack(side=tk.RIGHT, padx=10, pady=2)
             self.exit_btn.pack(side=tk.RIGHT, padx=5, pady=2)
             self.progress_bar['value'] = 0
+
+        backup_path = backup_database(db_path_val)
+        if backup_path:
+            self.log("log_backup_created", path=backup_path)
 
         thread = threading.Thread(target=self.cleaning_thread, args=(db_path_val,), daemon=True)
         thread.start()

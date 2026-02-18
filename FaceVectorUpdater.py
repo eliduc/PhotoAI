@@ -35,6 +35,7 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 import threading
 import queue
 from PIL import Image, ExifTags
+from photo_utils import correct_image_orientation, backup_database, setup_file_logger
 
 VERSION = "1.4"
 
@@ -87,6 +88,8 @@ TRANSLATIONS = {
         # Error messages
         'face_model_label': 'Face model:',
         'face_model_note': 'HOG = fast, CNN = accurate (GPU recommended)',
+
+        'log_backup_created': 'Database backup created: {path}',
 
         'error_title': 'Error',
         'error_no_db': 'Select an existing database file',
@@ -142,6 +145,8 @@ TRANSLATIONS = {
         'face_model_label': 'Модель лиц:',
         'face_model_note': 'HOG = быстро, CNN = точно (рекомендуется GPU)',
 
+        'log_backup_created': 'Резервная копия базы данных создана: {path}',
+
         'error_title': 'Ошибка',
         'error_no_db': 'Выберите существующий файл базы данных',
         'error_analysis': 'Ошибка анализа: {error}',
@@ -149,26 +154,6 @@ TRANSLATIONS = {
         'error_optimization': 'Ошибка оптимизации: {error}'
     }
 }
-
-
-def correct_image_orientation(image: Image.Image) -> Image.Image:
-    """Applies rotation/flip to PIL image based on its EXIF orientation data."""
-    try:
-        exif = image.getexif()
-        orientation_tag = next((k for k, v in ExifTags.TAGS.items() if v == 'Orientation'), None)
-
-        if orientation_tag in exif:
-            orientation = exif[orientation_tag]
-            if orientation == 2: image = image.transpose(Image.FLIP_LEFT_RIGHT)
-            elif orientation == 3: image = image.rotate(180, expand=True)
-            elif orientation == 4: image = image.transpose(Image.FLIP_TOP_BOTTOM)
-            elif orientation == 5: image = image.transpose(Image.FLIP_LEFT_RIGHT).rotate(270, expand=True)
-            elif orientation == 6: image = image.rotate(270, expand=True)
-            elif orientation == 7: image = image.transpose(Image.FLIP_LEFT_RIGHT).rotate(90, expand=True)
-            elif orientation == 8: image = image.rotate(90, expand=True)
-    except (AttributeError, KeyError, IndexError):
-        pass # Ignore errors if EXIF is missing or incorrect
-    return image
 
 
 class FaceVectorsUpdater:
@@ -201,7 +186,8 @@ class FaceVectorsUpdater:
         self.is_running = False
         self.face_model = tk.StringVar(value='hog')
         self.update_queue = queue.Queue()
-        
+        self.file_logger = setup_file_logger('FaceVectorUpdater')
+
         self.create_widgets()
         self.process_queue()
         self.update_status(self.tr('status_ready'), "idle")
@@ -332,6 +318,7 @@ class FaceVectorsUpdater:
 
     def log(self, message):
         self.update_queue.put(('log', f"{datetime.now().strftime('%H:%M:%S')} - {message}\n"))
+        self.file_logger.info(message)
 
     def update_status(self, message, status_type):
         self.current_status_type = status_type
@@ -431,6 +418,9 @@ class FaceVectorsUpdater:
 
     def update_vectors(self):
         self.log(self.tr('log_update_start'))
+        backup_path = backup_database(self.db_path.get())
+        if backup_path:
+            self.log(self.tr('log_backup_created', path=backup_path))
         success = False
         try:
             with sqlite3.connect(self.db_path.get()) as conn:

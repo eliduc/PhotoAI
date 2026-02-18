@@ -42,6 +42,7 @@ from ultralytics import YOLO
 import json
 import traceback
 import sys
+from photo_utils import correct_image_orientation as orient_image, IMAGE_EXTENSIONS, backup_database, get_file_creation_date, setup_file_logger
 
 # Imports for dog recognition
 import torch
@@ -50,6 +51,9 @@ from torchvision.models import detection as tv_det, densenet as tv_cls
 
 # Program Version
 VERSION = "3.10"
+
+# Settings file path for persisting user preferences between sessions
+SETTINGS_FILE = Path(__file__).parent / 'photosuite_settings.json'
 
 # --- Localization ---
 # All user-facing strings are stored here, organized by language.
@@ -137,8 +141,17 @@ localization = {
         'dog_exists_prompt': "A dog with this information already exists in the DB:\nName: {name}\nBreed: {breed}\nOwner: {owner}",
         'enter_body_name_prompt': "Please enter a full name or click 'Skip'.",
         'edit_unimplemented': "The edit function is under development.",
+        'edit_person_title': "Edit Person", 'edit_dog_title': "Edit Dog",
+        'edit_save_button': "Save", 'edit_cancel_button': "Cancel",
+        'edit_person_success': "Person updated successfully.", 'edit_person_fail': "Failed to update person: {e}",
+        'edit_dog_success': "Dog updated successfully.", 'edit_dog_fail': "Failed to update dog: {e}",
         'delete_person_confirm': "Are you sure you want to delete this person and all related data? This action cannot be undone.", 'delete_person_success': "Person deleted successfully.", 'delete_person_fail': "Deletion failed: {e}",
         'delete_dog_confirm': "Are you sure you want to delete this dog and all related data? This action cannot be undone.", 'delete_dog_success': "Dog deleted successfully.", 'delete_dog_fail': "Deletion failed: {e}",
+        'auto_assign_unknown_check': "Auto-assign unrecognized as unknown",
+        'search_placeholder': "Search...",
+        'undo_button': "Undo",
+        'undo_success': "Last operation undone successfully.",
+        'undo_empty': "Nothing to undo.",
     },
     'RU': {
         # Main Window
@@ -223,8 +236,17 @@ localization = {
         'dog_exists_prompt': "Собака с такой информацией уже существует в БД:\nКличка: {name}\nПорода: {breed}\nВладелец: {owner}",
         'enter_body_name_prompt': "Пожалуйста, введите полное имя или нажмите 'Пропустить'.",
         'edit_unimplemented': "Функция редактирования находится в разработке.",
+        'edit_person_title': "Редактирование человека", 'edit_dog_title': "Редактирование собаки",
+        'edit_save_button': "Сохранить", 'edit_cancel_button': "Отмена",
+        'edit_person_success': "Данные человека успешно обновлены.", 'edit_person_fail': "Не удалось обновить данные человека: {e}",
+        'edit_dog_success': "Данные собаки успешно обновлены.", 'edit_dog_fail': "Не удалось обновить данные собаки: {e}",
         'delete_person_confirm': "Вы уверены, что хотите удалить этого человека и все связанные данные? Это действие нельзя отменить.", 'delete_person_success': "Человек успешно удален.", 'delete_person_fail': "Ошибка удаления: {e}",
         'delete_dog_confirm': "Вы уверены, что хотите удалить эту собаку и все связанные данные? Это действие нельзя отменить.", 'delete_dog_success': "Собака успешно удалена.", 'delete_dog_fail': "Ошибка удаления: {e}",
+        'auto_assign_unknown_check': "Автоматически назначать нераспознанных как неизвестных",
+        'search_placeholder': "Поиск...",
+        'undo_button': "Отменить",
+        'undo_success': "Последняя операция успешно отменена.",
+        'undo_empty': "Нечего отменять.",
     },
     'IT': {
         # Main Window
@@ -309,8 +331,17 @@ localization = {
         'dog_exists_prompt': "Un cane con queste informazioni esiste già nel DB:\nNome: {name}\nRazza: {breed}\nProprietario: {owner}",
         'enter_body_name_prompt': "Inserisci un nome completo o fai clic su 'Salta'.",
         'edit_unimplemented': "La funzione di modifica è in fase di sviluppo.",
+        'edit_person_title': "Modifica Persona", 'edit_dog_title': "Modifica Cane",
+        'edit_save_button': "Salva", 'edit_cancel_button': "Annulla",
+        'edit_person_success': "Persona aggiornata con successo.", 'edit_person_fail': "Aggiornamento persona fallito: {e}",
+        'edit_dog_success': "Cane aggiornato con successo.", 'edit_dog_fail': "Aggiornamento cane fallito: {e}",
         'delete_person_confirm': "Sei sicuro di voler eliminare questa persona e tutti i dati correlati? Questa azione non può essere annullata.", 'delete_person_success': "Persona eliminata con successo.", 'delete_person_fail': "Eliminazione fallita: {e}",
         'delete_dog_confirm': "Sei sicuro di voler eliminare questo cane e tutti i dati correlati? Questa azione non può essere annullata.", 'delete_dog_success': "Cane eliminato con successo.", 'delete_dog_fail': "Eliminazione fallita: {e}",
+        'auto_assign_unknown_check': "Assegna automaticamente i non riconosciuti come sconosciuti",
+        'search_placeholder': "Cerca...",
+        'undo_button': "Annulla",
+        'undo_success': "Ultima operazione annullata con successo.",
+        'undo_empty': "Niente da annullare.",
     }
 }
 
@@ -360,24 +391,6 @@ class StdOutRedirector:
         if self._buffer:
             self.queue.put(('log', self._buffer))
             self._buffer = ''
-
-def orient_image(img: Image.Image) -> Image.Image:
-    """Applies rotation/flip to an image based on its EXIF orientation data."""
-    try:
-        exif = img.getexif()
-        orientation_tag = 274
-        if orientation_tag in exif:
-            orientation = exif[orientation_tag]
-            if orientation == 2: img = img.transpose(Image.FLIP_LEFT_RIGHT)
-            elif orientation == 3: img = img.rotate(180, expand=True)
-            elif orientation == 4: img = img.transpose(Image.FLIP_TOP_BOTTOM)
-            elif orientation == 5: img = img.transpose(Image.FLIP_LEFT_RIGHT).rotate(270, expand=True)
-            elif orientation == 6: img = img.rotate(270, expand=True)
-            elif orientation == 7: img = img.transpose(Image.FLIP_LEFT_RIGHT).rotate(90, expand=True)
-            elif orientation == 8: img = img.rotate(90, expand=True)
-    except (AttributeError, KeyError, IndexError):
-        pass
-    return img
 
 class BaseDialog(tk.Toplevel):
     """Base class for all dialog windows with improved centering."""
@@ -655,9 +668,17 @@ class FaceDetectionV2:
         
         self.processing = False
         self.processed_mode = tk.StringVar(value="skip")
+        self.auto_assign_unknown = tk.BooleanVar(value=False)
         self.processed_decision_for_all = None
         self.db_path = None
         self.ref_db_path = None
+
+        # Undo stack: list of (sql_statements, description) tuples
+        self.undo_stack = []
+
+        # Search variables for People/Dogs tabs
+        self.people_search_var = tk.StringVar()
+        self.dogs_search_var = tk.StringVar()
         
         # Attributes for dog recognition models
         self.dog_det_model = None; self.dog_cls_model = None; self.dog_prep_det = None
@@ -666,7 +687,8 @@ class FaceDetectionV2:
         self.dog_detection_threshold = tk.DoubleVar(value=0.35)
         
         self.yolo = None; self.loaded_yolo_model_name = None; self.displayed_photo = None
-        
+        self.file_logger = setup_file_logger('FaceDetection')
+
         self.create_widgets()
         
         # --- Top-right corner widgets ---
@@ -690,9 +712,104 @@ class FaceDetectionV2:
         self.process_queue()
         self.update_status(self.lang.get('status_ready_torch', device=self.dog_device.upper()), 'idle')
 
+        # Load persisted settings and set up window close handler
+        self.load_settings()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+        # Keyboard shortcuts
+        self.root.bind('<Control-z>', lambda e: self.undo_last_operation())
+        self.root.bind('<Control-Z>', lambda e: self.undo_last_operation())
+        self.root.bind('<F5>', lambda e: self._refresh_current_tab())
+        self.root.bind('<Delete>', lambda e: self._delete_current_selection())
+
+    def _refresh_current_tab(self):
+        """Refresh whichever tab is currently active."""
+        current = self.main_notebook.index(self.main_notebook.select())
+        if current == 1: self.refresh_people_list()
+        elif current == 2: self.refresh_dogs_list()
+
+    def _delete_current_selection(self):
+        """Delete selected item from whichever tab is active."""
+        current = self.main_notebook.index(self.main_notebook.select())
+        if current == 1 and self.db_path: self.delete_person()
+        elif current == 2 and self.db_path: self.delete_dog()
+
+    def on_closing(self):
+        """Save settings and destroy the main window."""
+        self.save_settings()
+        self.root.destroy()
+
+    def save_settings(self):
+        """Persist current user settings to a JSON file."""
+        settings = {
+            'face_model_internal': self.face_model_internal,
+            'yolo_model': self.yolo_model.get(),
+            'face_threshold': self.face_threshold.get(),
+            'yolo_person_conf': self.yolo_person_conf.get(),
+            'current_lang': self.current_lang.get(),
+            'db_path': self.db_path or '',
+            'ref_db_path': self.ref_db_path or '',
+            'include_subdirs': self.include_subdirs.get(),
+            'processed_mode': self.processed_mode.get(),
+        }
+        try:
+            with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Warning: Could not save settings: {e}")
+
+    def load_settings(self):
+        """Load user settings from JSON file if it exists."""
+        if not SETTINGS_FILE.exists():
+            return
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+        except Exception as e:
+            print(f"Warning: Could not load settings: {e}")
+            return
+        # Restore face model
+        if 'face_model_internal' in settings:
+            self.face_model_internal = settings['face_model_internal']
+            if self.face_model_internal == 'cnn':
+                self.face_model.set(self.lang.get('face_model_accurate'))
+            else:
+                self.face_model.set(self.lang.get('face_model_fast'))
+        # Restore YOLO model
+        if 'yolo_model' in settings:
+            self.yolo_model.set(settings['yolo_model'])
+        # Restore thresholds
+        if 'face_threshold' in settings:
+            self.face_threshold.set(settings['face_threshold'])
+        if 'yolo_person_conf' in settings:
+            self.yolo_person_conf.set(settings['yolo_person_conf'])
+        # Restore language (this triggers on_language_change via the trace)
+        if 'current_lang' in settings and settings['current_lang'] in ('EN', 'RU', 'IT'):
+            self.current_lang.set(settings['current_lang'])
+        # Restore database paths
+        if settings.get('db_path') and os.path.isfile(settings['db_path']):
+            db_filepath = settings['db_path']
+            if self.init_database(db_filepath) and self.validate_database_structure(db_filepath):
+                self.db_path = db_filepath
+                self.db_path_var.set(db_filepath)
+                self.set_db_dependent_widgets_state(tk.NORMAL)
+                self.refresh_people_list()
+                self.refresh_dogs_list()
+        if settings.get('ref_db_path') and os.path.isfile(settings['ref_db_path']):
+            ref_filepath = settings['ref_db_path']
+            if self.validate_database_structure(ref_filepath):
+                self.ref_db_path = ref_filepath
+                self.ref_db_path_var.set(ref_filepath)
+        # Restore checkboxes and radio buttons
+        if 'include_subdirs' in settings:
+            self.include_subdirs.set(settings['include_subdirs'])
+        if 'processed_mode' in settings:
+            self.processed_mode.set(settings['processed_mode'])
+
     def log(self, message):
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.update_queue.put(('log', f"[{timestamp}] {message}\n"))
+        self.file_logger.info(message)
 
     def process_queue(self):
         try:
@@ -768,6 +885,7 @@ class FaceDetectionV2:
         self.repro_rb1.config(text=self.lang.get('reprocess_skip'))
         self.repro_rb2.config(text=self.lang.get('reprocess_process'))
         self.repro_rb3.config(text=self.lang.get('reprocess_ask'))
+        self.auto_unknown_cb.config(text=self.lang.get('auto_assign_unknown_check'))
         
         self.start_btn.config(text=self.lang.get('start_scan_button'))
         self.stop_btn.config(text=self.lang.get('stop_button'))
@@ -780,9 +898,11 @@ class FaceDetectionV2:
         self.btn_refresh_people.config(text=self.lang.get('refresh_button'))
         self.btn_edit_person.config(text=self.lang.get('edit_button'))
         self.btn_delete_person.config(text=self.lang.get('delete_button'))
+        self.btn_undo_people.config(text=self.lang.get('undo_button'))
         self.btn_refresh_dogs.config(text=self.lang.get('refresh_button'))
         self.btn_edit_dog.config(text=self.lang.get('edit_button'))
         self.btn_delete_dog.config(text=self.lang.get('delete_button'))
+        self.btn_undo_dogs.config(text=self.lang.get('undo_button'))
         
         # Treeview Headers
         self.people_tree.heading('ID', text=self.lang.get('people_col_id'))
@@ -799,6 +919,94 @@ class FaceDetectionV2:
         self.dogs_tree.heading('Owner', text=self.lang.get('dogs_col_owner'))
         self.dogs_tree.heading('Photos', text=self.lang.get('dogs_col_photos'))
         self.dogs_tree.heading('Notes', text=self.lang.get('dogs_col_notes'))
+
+    def _clear_placeholder(self, entry, var):
+        """Clear the search placeholder text on focus."""
+        if entry.get() == self.lang.get('search_placeholder'):
+            entry.delete(0, tk.END)
+
+    def _restore_placeholder(self, entry, var, key):
+        """Restore placeholder text if the entry is empty on focus out."""
+        if not entry.get():
+            entry.insert(0, self.lang.get(key))
+
+    def filter_people_list(self):
+        """Filter the people treeview based on the search query."""
+        query = self.people_search_var.get().strip().lower()
+        if query == self.lang.get('search_placeholder').lower() or not query:
+            self.refresh_people_list()
+            return
+        if not self.db_path: return
+        for item in self.people_tree.get_children(): self.people_tree.delete(item)
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                search_pattern = f"%{query}%"
+                cursor.execute(
+                    "SELECT p.id, CASE WHEN p.is_known THEN 'Known' ELSE 'Unknown' END, p.full_name, p.short_name, COUNT(DISTINCT pd.image_id), p.notes "
+                    "FROM persons p LEFT JOIN person_detections pd ON p.id = pd.person_id "
+                    "WHERE LOWER(p.full_name) LIKE ? OR LOWER(p.short_name) LIKE ? OR LOWER(COALESCE(p.notes,'')) LIKE ? "
+                    "GROUP BY p.id ORDER BY p.is_known DESC, p.full_name",
+                    (search_pattern, search_pattern, search_pattern))
+                for row in cursor.fetchall(): self.people_tree.insert('', tk.END, values=row)
+        except Exception as e: self.log(f"Error filtering people list: {e}")
+
+    def filter_dogs_list(self):
+        """Filter the dogs treeview based on the search query."""
+        query = self.dogs_search_var.get().strip().lower()
+        if query == self.lang.get('search_placeholder').lower() or not query:
+            self.refresh_dogs_list()
+            return
+        if not self.db_path: return
+        for item in self.dogs_tree.get_children(): self.dogs_tree.delete(item)
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                search_pattern = f"%{query}%"
+                cursor.execute(
+                    "SELECT d.id, CASE WHEN d.is_known THEN 'Known' ELSE 'Unknown' END, d.name, d.breed, d.owner, COUNT(DISTINCT dd.image_id), d.notes "
+                    "FROM dogs d LEFT JOIN dog_detections dd ON d.id = dd.dog_id "
+                    "WHERE LOWER(COALESCE(d.name,'')) LIKE ? OR LOWER(COALESCE(d.breed,'')) LIKE ? OR LOWER(COALESCE(d.owner,'')) LIKE ? OR LOWER(COALESCE(d.notes,'')) LIKE ? "
+                    "GROUP BY d.id ORDER BY d.is_known DESC, d.name",
+                    (search_pattern, search_pattern, search_pattern, search_pattern))
+                for row in cursor.fetchall(): self.dogs_tree.insert('', tk.END, values=row)
+        except Exception as e: self.log(f"Error filtering dogs list: {e}")
+
+    def push_undo(self, undo_sql_list, description=""):
+        """Push an undo operation onto the stack. undo_sql_list is a list of (sql, params) tuples."""
+        self.undo_stack.append((undo_sql_list, description))
+        # Enable undo buttons
+        try:
+            self.btn_undo_people.config(state=tk.NORMAL)
+            self.btn_undo_dogs.config(state=tk.NORMAL)
+        except Exception: pass
+
+    def undo_last_operation(self):
+        """Undo the most recent database operation."""
+        if not self.undo_stack:
+            messagebox.showinfo(self.lang.get('info_title'), self.lang.get('undo_empty'))
+            return
+        if not self.db_path: return
+        undo_sql_list, description = self.undo_stack.pop()
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('PRAGMA foreign_keys = ON;')
+                for sql, params in undo_sql_list:
+                    cursor.execute(sql, params)
+            self.refresh_people_list()
+            self.refresh_dogs_list()
+            self.log(f"Undo: {description}")
+            messagebox.showinfo(self.lang.get('success_title'), self.lang.get('undo_success'))
+        except Exception as e:
+            self.log(f"Undo error: {e}")
+            messagebox.showerror(self.lang.get('error_title'), str(e))
+        # Disable undo buttons if stack is empty
+        if not self.undo_stack:
+            try:
+                self.btn_undo_people.config(state=tk.DISABLED)
+                self.btn_undo_dogs.config(state=tk.DISABLED)
+            except Exception: pass
 
     def create_widgets(self):
         self.main_notebook = ttk.Notebook(self.root); self.main_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -870,19 +1078,23 @@ class FaceDetectionV2:
         self.repro_rb1 = ttk.Radiobutton(self.repro_frame, text=self.lang.get('reprocess_skip'), variable=self.processed_mode, value="skip"); self.repro_rb1.pack(anchor=tk.W)
         self.repro_rb2 = ttk.Radiobutton(self.repro_frame, text=self.lang.get('reprocess_process'), variable=self.processed_mode, value="process"); self.repro_rb2.pack(anchor=tk.W)
         self.repro_rb3 = ttk.Radiobutton(self.repro_frame, text=self.lang.get('reprocess_ask'), variable=self.processed_mode, value="ask"); self.repro_rb3.pack(anchor=tk.W)
-        
+        self.auto_unknown_cb = ttk.Checkbutton(self.repro_frame, text=self.lang.get('auto_assign_unknown_check'), variable=self.auto_assign_unknown); self.auto_unknown_cb.pack(anchor=tk.W, pady=(5, 0))
+
         control_frame = ttk.Frame(parent, padding="10"); control_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=5)
         self.start_btn = ttk.Button(control_frame, text=self.lang.get('start_scan_button'), command=self.start_processing, state=tk.DISABLED); self.start_btn.pack(side=tk.LEFT, padx=5)
         self.stop_btn = ttk.Button(control_frame, text=self.lang.get('stop_button'), command=self.stop_processing, state=tk.DISABLED); self.stop_btn.pack(side=tk.LEFT, padx=5)
         self.exit_btn = ttk.Button(control_frame, text=self.lang.get('exit_button'), command=self.root.destroy); self.exit_btn.pack(side=tk.RIGHT, padx=5)
         self.status_label = ttk.Label(control_frame, text=self.lang.get('status_ready'), style="Idle.Status.TLabel"); self.status_label.pack(side=tk.LEFT, padx=20, fill=tk.X, expand=True)
 
-        self.image_frame = ttk.LabelFrame(parent, text=self.lang.get('current_image_frame'), padding="10"); self.image_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=10)
+        self.scan_progress = ttk.Progressbar(parent, orient='horizontal', mode='determinate')
+        self.scan_progress.grid(row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5))
+
+        self.image_frame = ttk.LabelFrame(parent, text=self.lang.get('current_image_frame'), padding="10"); self.image_frame.grid(row=3, column=0, sticky="nsew", padx=10, pady=10)
         self.image_label = ttk.Label(self.image_frame); self.image_label.pack(expand=True, fill=tk.BOTH)
-        self.log_frame = ttk.LabelFrame(parent, text=self.lang.get('log_frame'), padding="10"); self.log_frame.grid(row=2, column=1, sticky="nsew", padx=10, pady=10)
+        self.log_frame = ttk.LabelFrame(parent, text=self.lang.get('log_frame'), padding="10"); self.log_frame.grid(row=3, column=1, sticky="nsew", padx=10, pady=10)
         self.log_text = scrolledtext.ScrolledText(self.log_frame, width=50, height=30, wrap=tk.WORD); self.log_text.pack(fill=tk.BOTH, expand=True)
         self.copy_btn = ttk.Button(self.log_frame, text="📋", width=3, command=self.copy_log_to_clipboard); self.copy_btn.place(relx=1.0, rely=0, x=-5, y=2, anchor="ne")
-        parent.grid_rowconfigure(2, weight=1); parent.grid_columnconfigure(0, weight=2); parent.grid_columnconfigure(1, weight=1)
+        parent.grid_rowconfigure(3, weight=1); parent.grid_columnconfigure(0, weight=2); parent.grid_columnconfigure(1, weight=1)
 
     def update_model_info(self):
         """Updates the descriptive text for the selected YOLO model based on the current language."""
@@ -901,6 +1113,15 @@ class FaceDetectionV2:
         self.btn_refresh_people = ttk.Button(toolbar, text=self.lang.get('refresh_button'), command=self.refresh_people_list, state=tk.DISABLED); self.btn_refresh_people.pack(side=tk.LEFT, padx=5)
         self.btn_edit_person = ttk.Button(toolbar, text=self.lang.get('edit_button'), command=self.edit_person, state=tk.DISABLED); self.btn_edit_person.pack(side=tk.LEFT, padx=5)
         self.btn_delete_person = ttk.Button(toolbar, text=self.lang.get('delete_button'), command=self.delete_person, state=tk.DISABLED); self.btn_delete_person.pack(side=tk.LEFT, padx=5)
+        self.btn_undo_people = ttk.Button(toolbar, text=self.lang.get('undo_button'), command=self.undo_last_operation, state=tk.DISABLED); self.btn_undo_people.pack(side=tk.LEFT, padx=5)
+        # Search entry
+        self.people_search_entry = ttk.Entry(toolbar, textvariable=self.people_search_var, width=25)
+        self.people_search_entry.pack(side=tk.RIGHT, padx=5)
+        self.people_search_entry.insert(0, self.lang.get('search_placeholder'))
+        self.people_search_entry.bind('<FocusIn>', lambda e: self._clear_placeholder(self.people_search_entry, self.people_search_var))
+        self.people_search_entry.bind('<FocusOut>', lambda e: self._restore_placeholder(self.people_search_entry, self.people_search_var, 'search_placeholder'))
+        self.people_search_var.trace_add('write', lambda *a: self.filter_people_list())
+        self.people_search_lbl = ttk.Label(toolbar, text="🔍"); self.people_search_lbl.pack(side=tk.RIGHT)
         columns = ('ID', 'Status', 'Full Name', 'Short Name', 'Photos', 'Notes'); self.people_tree = ttk.Treeview(parent, columns=columns, show='headings')
         self.people_tree.heading('ID', text=self.lang.get('people_col_id')); self.people_tree.column('ID', width=50, anchor='center'); self.people_tree.heading('Status', text=self.lang.get('people_col_status')); self.people_tree.column('Status', width=100); self.people_tree.heading('Full Name', text=self.lang.get('people_col_fullname')); self.people_tree.column('Full Name', width=200); self.people_tree.heading('Short Name', text=self.lang.get('people_col_shortname')); self.people_tree.column('Short Name', width=150); self.people_tree.heading('Photos', text=self.lang.get('people_col_photos')); self.people_tree.column('Photos', width=80, anchor='center'); self.people_tree.heading('Notes', text=self.lang.get('people_col_notes')); self.people_tree.column('Notes', width=300)
         scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=self.people_tree.yview); self.people_tree.configure(yscrollcommand=scrollbar.set)
@@ -911,6 +1132,15 @@ class FaceDetectionV2:
         self.btn_refresh_dogs = ttk.Button(toolbar, text=self.lang.get('refresh_button'), command=self.refresh_dogs_list, state=tk.DISABLED); self.btn_refresh_dogs.pack(side=tk.LEFT, padx=5)
         self.btn_edit_dog = ttk.Button(toolbar, text=self.lang.get('edit_button'), command=self.edit_dog, state=tk.DISABLED); self.btn_edit_dog.pack(side=tk.LEFT, padx=5)
         self.btn_delete_dog = ttk.Button(toolbar, text=self.lang.get('delete_button'), command=self.delete_dog, state=tk.DISABLED); self.btn_delete_dog.pack(side=tk.LEFT, padx=5)
+        self.btn_undo_dogs = ttk.Button(toolbar, text=self.lang.get('undo_button'), command=self.undo_last_operation, state=tk.DISABLED); self.btn_undo_dogs.pack(side=tk.LEFT, padx=5)
+        # Search entry
+        self.dogs_search_entry = ttk.Entry(toolbar, textvariable=self.dogs_search_var, width=25)
+        self.dogs_search_entry.pack(side=tk.RIGHT, padx=5)
+        self.dogs_search_entry.insert(0, self.lang.get('search_placeholder'))
+        self.dogs_search_entry.bind('<FocusIn>', lambda e: self._clear_placeholder(self.dogs_search_entry, self.dogs_search_var))
+        self.dogs_search_entry.bind('<FocusOut>', lambda e: self._restore_placeholder(self.dogs_search_entry, self.dogs_search_var, 'search_placeholder'))
+        self.dogs_search_var.trace_add('write', lambda *a: self.filter_dogs_list())
+        self.dogs_search_lbl = ttk.Label(toolbar, text="🔍"); self.dogs_search_lbl.pack(side=tk.RIGHT)
         columns = ('ID', 'Status', 'Name', 'Breed', 'Owner', 'Photos', 'Notes'); self.dogs_tree = ttk.Treeview(parent, columns=columns, show='headings')
         col_map = {'ID': self.lang.get('dogs_col_id'), 'Status': self.lang.get('dogs_col_status'), 'Name': self.lang.get('dogs_col_name'), 'Breed': self.lang.get('dogs_col_breed'), 'Owner': self.lang.get('dogs_col_owner'), 'Photos': self.lang.get('dogs_col_photos'), 'Notes': self.lang.get('dogs_col_notes')}
         widths = {'ID':50, 'Status':100, 'Name':150, 'Breed':150, 'Owner':150, 'Photos':80, 'Notes':200}
@@ -920,6 +1150,8 @@ class FaceDetectionV2:
     
     def set_db_dependent_widgets_state(self, state):
         self.start_btn.config(state=state); self.btn_refresh_people.config(state=state); self.btn_edit_person.config(state=state); self.btn_delete_person.config(state=state); self.btn_refresh_dogs.config(state=state); self.btn_edit_dog.config(state=state); self.btn_delete_dog.config(state=state)
+        undo_state = tk.NORMAL if self.undo_stack and state == tk.NORMAL else tk.DISABLED
+        self.btn_undo_people.config(state=undo_state); self.btn_undo_dogs.config(state=undo_state)
     
     def init_database(self, db_path):
         """Creates tables if they don't exist, and adds missing columns."""
@@ -1077,27 +1309,183 @@ class FaceDetectionV2:
                 for row in cursor.fetchall(): self.dogs_tree.insert('', tk.END, values=row)
         except Exception as e: self.log(f"Error refreshing dogs list: {e}")
 
-    def edit_person(self): messagebox.showinfo(self.lang.get('info_title'), self.lang.get('edit_unimplemented'))
+    def edit_person(self):
+        sel = self.people_tree.selection()
+        if not sel:
+            messagebox.showwarning(self.lang.get('warning_title'), self.lang.get('select_person_prompt'))
+            return
+        values = self.people_tree.item(sel[0])['values']
+        person_id = values[0]
+        # Fetch current data from the database
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT full_name, short_name, notes FROM persons WHERE id = ?', (person_id,))
+                row = cursor.fetchone()
+                if not row:
+                    messagebox.showerror(self.lang.get('error_title'), "Person not found in database.")
+                    return
+        except Exception as e:
+            messagebox.showerror(self.lang.get('error_title'), str(e))
+            return
+        current_full_name, current_short_name, current_notes = row[0] or '', row[1] or '', row[2] or ''
+        # Create edit dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title(self.lang.get('edit_person_title'))
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        frame = ttk.Frame(dialog, padding="15")
+        frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frame, text=self.lang.get('full_name_label')).grid(row=0, column=0, sticky=tk.W, pady=5)
+        full_name_var = tk.StringVar(value=current_full_name)
+        ttk.Entry(frame, textvariable=full_name_var, width=40).grid(row=0, column=1, padx=5, pady=5)
+        ttk.Label(frame, text=self.lang.get('short_name_label')).grid(row=1, column=0, sticky=tk.W, pady=5)
+        short_name_var = tk.StringVar(value=current_short_name)
+        ttk.Entry(frame, textvariable=short_name_var, width=40).grid(row=1, column=1, padx=5, pady=5)
+        ttk.Label(frame, text=self.lang.get('notes_label')).grid(row=2, column=0, sticky=tk.W, pady=5)
+        notes_text = tk.Text(frame, width=40, height=4)
+        notes_text.grid(row=2, column=1, padx=5, pady=5)
+        notes_text.insert('1.0', current_notes)
+        def save_edit():
+            new_full = full_name_var.get().strip()
+            new_short = short_name_var.get().strip()
+            new_notes = notes_text.get('1.0', tk.END).strip()
+            if not new_full:
+                messagebox.showwarning(self.lang.get('warning_title'), self.lang.get('enter_full_name_prompt'))
+                return
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    # Fetch old is_known for undo
+                    cursor.execute('SELECT is_known FROM persons WHERE id = ?', (person_id,))
+                    old_is_known = cursor.fetchone()[0]
+                    cursor.execute('UPDATE persons SET full_name = ?, short_name = ?, notes = ?, is_known = 1 WHERE id = ?', (new_full, new_short, new_notes, person_id))
+                self.push_undo(
+                    [('UPDATE persons SET full_name = ?, short_name = ?, notes = ?, is_known = ? WHERE id = ?',
+                      (current_full_name, current_short_name, current_notes, old_is_known, person_id))],
+                    f"Edit person '{current_full_name}' -> '{new_full}'"
+                )
+                self.refresh_people_list()
+                messagebox.showinfo(self.lang.get('success_title'), self.lang.get('edit_person_success'))
+                dialog.destroy()
+            except Exception as e:
+                messagebox.showerror(self.lang.get('error_title'), self.lang.get('edit_person_fail', e=e))
+        btn_frame = ttk.Frame(frame)
+        btn_frame.grid(row=3, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_frame, text=self.lang.get('edit_save_button'), command=save_edit).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text=self.lang.get('edit_cancel_button'), command=dialog.destroy).pack(side=tk.LEFT, padx=10)
+        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
 
     def delete_person(self):
         if not (sel := self.people_tree.selection()): messagebox.showwarning(self.lang.get('warning_title'), self.lang.get('select_person_prompt')); return
         if messagebox.askyesno(self.lang.get('delete_button'), self.lang.get('delete_person_confirm')):
             person_id = self.people_tree.item(sel[0])['values'][0]
             try:
+                # Save person data for undo before deleting
                 with sqlite3.connect(self.db_path) as conn:
-                    cursor = conn.cursor(); cursor.execute('PRAGMA foreign_keys = ON;'); cursor.execute('DELETE FROM persons WHERE id = ?', (person_id,))
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT full_name, short_name, is_known, notes, created_date, updated_date FROM persons WHERE id = ?', (person_id,))
+                    person_row = cursor.fetchone()
+                    cursor.execute('PRAGMA foreign_keys = ON;')
+                    cursor.execute('DELETE FROM persons WHERE id = ?', (person_id,))
+                if person_row:
+                    self.push_undo(
+                        [('INSERT INTO persons (id, full_name, short_name, is_known, notes, created_date, updated_date) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                          (person_id, person_row[0], person_row[1], person_row[2], person_row[3], person_row[4], person_row[5]))],
+                        f"Delete person '{person_row[0] or 'Unknown'}' (ID: {person_id})"
+                    )
                 self.refresh_people_list(); messagebox.showinfo(self.lang.get('success_title'), self.lang.get('delete_person_success'))
             except Exception as e: messagebox.showerror(self.lang.get('error_title'), self.lang.get('delete_person_fail', e=e))
 
-    def edit_dog(self): messagebox.showinfo(self.lang.get('info_title'), self.lang.get('edit_unimplemented'))
-    
+    def edit_dog(self):
+        sel = self.dogs_tree.selection()
+        if not sel:
+            messagebox.showwarning(self.lang.get('warning_title'), self.lang.get('select_dog_prompt'))
+            return
+        values = self.dogs_tree.item(sel[0])['values']
+        dog_id = values[0]
+        # Fetch current data from the database
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT name, breed, owner, notes FROM dogs WHERE id = ?', (dog_id,))
+                row = cursor.fetchone()
+                if not row:
+                    messagebox.showerror(self.lang.get('error_title'), "Dog not found in database.")
+                    return
+        except Exception as e:
+            messagebox.showerror(self.lang.get('error_title'), str(e))
+            return
+        current_name, current_breed, current_owner, current_notes = row[0] or '', row[1] or '', row[2] or '', row[3] or ''
+        # Create edit dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title(self.lang.get('edit_dog_title'))
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        frame = ttk.Frame(dialog, padding="15")
+        frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frame, text=self.lang.get('dog_name_label')).grid(row=0, column=0, sticky=tk.W, pady=5)
+        name_var = tk.StringVar(value=current_name)
+        ttk.Entry(frame, textvariable=name_var, width=40).grid(row=0, column=1, padx=5, pady=5)
+        ttk.Label(frame, text=self.lang.get('dog_breed_label')).grid(row=1, column=0, sticky=tk.W, pady=5)
+        breed_var = tk.StringVar(value=current_breed)
+        ttk.Entry(frame, textvariable=breed_var, width=40).grid(row=1, column=1, padx=5, pady=5)
+        ttk.Label(frame, text=self.lang.get('dog_owner_label')).grid(row=2, column=0, sticky=tk.W, pady=5)
+        owner_var = tk.StringVar(value=current_owner)
+        ttk.Entry(frame, textvariable=owner_var, width=40).grid(row=2, column=1, padx=5, pady=5)
+        ttk.Label(frame, text=self.lang.get('notes_label')).grid(row=3, column=0, sticky=tk.W, pady=5)
+        notes_text = tk.Text(frame, width=40, height=4)
+        notes_text.grid(row=3, column=1, padx=5, pady=5)
+        notes_text.insert('1.0', current_notes)
+        def save_edit():
+            new_name = name_var.get().strip()
+            new_breed = breed_var.get().strip()
+            new_owner = owner_var.get().strip()
+            new_notes = notes_text.get('1.0', tk.END).strip()
+            if not new_name:
+                messagebox.showwarning(self.lang.get('warning_title'), self.lang.get('enter_dog_name_prompt'))
+                return
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT is_known FROM dogs WHERE id = ?', (dog_id,))
+                    old_is_known = cursor.fetchone()[0]
+                    cursor.execute('UPDATE dogs SET name = ?, breed = ?, owner = ?, notes = ?, is_known = 1 WHERE id = ?', (new_name, new_breed, new_owner, new_notes, dog_id))
+                self.push_undo(
+                    [('UPDATE dogs SET name = ?, breed = ?, owner = ?, notes = ?, is_known = ? WHERE id = ?',
+                      (current_name, current_breed, current_owner, current_notes, old_is_known, dog_id))],
+                    f"Edit dog '{current_name}' -> '{new_name}'"
+                )
+                self.refresh_dogs_list()
+                messagebox.showinfo(self.lang.get('success_title'), self.lang.get('edit_dog_success'))
+                dialog.destroy()
+            except Exception as e:
+                messagebox.showerror(self.lang.get('error_title'), self.lang.get('edit_dog_fail', e=e))
+        btn_frame = ttk.Frame(frame)
+        btn_frame.grid(row=4, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_frame, text=self.lang.get('edit_save_button'), command=save_edit).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text=self.lang.get('edit_cancel_button'), command=dialog.destroy).pack(side=tk.LEFT, padx=10)
+        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+
     def delete_dog(self):
         if not (sel := self.dogs_tree.selection()): messagebox.showwarning(self.lang.get('warning_title'), self.lang.get('select_dog_prompt')); return
         if messagebox.askyesno(self.lang.get('delete_button'), self.lang.get('delete_dog_confirm')):
             dog_id = self.dogs_tree.item(sel[0])['values'][0]
             try:
                 with sqlite3.connect(self.db_path) as conn:
-                    cursor = conn.cursor(); cursor.execute('PRAGMA foreign_keys = ON;'); cursor.execute('DELETE FROM dogs WHERE id = ?', (dog_id,));
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT name, breed, owner, is_known, notes, created_date, updated_date FROM dogs WHERE id = ?', (dog_id,))
+                    dog_row = cursor.fetchone()
+                    cursor.execute('PRAGMA foreign_keys = ON;')
+                    cursor.execute('DELETE FROM dogs WHERE id = ?', (dog_id,))
+                if dog_row:
+                    self.push_undo(
+                        [('INSERT INTO dogs (id, name, breed, owner, is_known, notes, created_date, updated_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                          (dog_id, dog_row[0], dog_row[1], dog_row[2], dog_row[3], dog_row[4], dog_row[5], dog_row[6]))],
+                        f"Delete dog '{dog_row[0] or 'Unknown'}' (ID: {dog_id})"
+                    )
                 self.refresh_dogs_list(); messagebox.showinfo(self.lang.get('success_title'), self.lang.get('delete_dog_success'))
             except Exception as e: messagebox.showerror(self.lang.get('error_title'), self.lang.get('delete_dog_fail', e=e))
 
@@ -1216,7 +1604,10 @@ class FaceDetectionV2:
             distances = face_recognition.face_distance(known_face_encodings, face_encoding_to_check)
             if len(distances) == 0: return None
             best_match_index = np.argmin(distances)
-            if distances[best_match_index] < self.face_threshold.get(): return known_face_metadata[best_match_index]
+            if distances[best_match_index] < self.face_threshold.get():
+                metadata = known_face_metadata[best_match_index]
+                metadata['distance'] = float(distances[best_match_index])
+                return metadata
         except Exception as e: self.log(f"Identification error in {os.path.basename(db_path)}: {e}")
         finally:
             if not main_conn or (main_conn and db_path != self.db_path): conn.close()
@@ -1227,7 +1618,7 @@ class FaceDetectionV2:
             identified_person_id = None
             match = self.identify_person(person_obj['face_encoding'], self.db_path, main_conn=conn)
             if match and match['id'] not in already_assigned_ids:
-                identified_person_id = match['id']; self.log(f"  Recognized (main DB): {match['short_name']} (ID: {match['id']})")
+                identified_person_id = match['id']; self.log(f"  Recognized (main DB): {match['short_name']} (ID: {match['id']}, confidence: {1 - match.get('distance', 0):.1%})")
             elif self.ref_db_path:
                 ref_match = self.identify_person(person_obj['face_encoding'], self.ref_db_path)
                 if ref_match:
@@ -1240,23 +1631,31 @@ class FaceDetectionV2:
                         else: self.log(f"  Skipped assignment of '{person_info_from_ref['short_name']}' (ID={potential_id}) as it's already assigned in this photo.")
             if identified_person_id: person_obj['person_id'] = identified_person_id
             else:
-                dialog_event = threading.Event(); dialog_result = {}; cb = lambda r: (dialog_result.update({'result': r}), dialog_event.set())
-                self.update_queue.put(('show_person_dialog', (image, person_obj['face_location'], person_obj['face_encoding'], cb))); dialog_event.wait()
-                if person_result := dialog_result.get('result'):
-                    if person_id := self.create_or_update_person(person_result, conn): person_obj['person_id'] = person_id
+                if self.auto_assign_unknown.get():
+                    auto_result = {'action': 'unknown'}
+                    if person_id := self.create_or_update_person(auto_result, conn): person_obj['person_id'] = person_id
+                else:
+                    dialog_event = threading.Event(); dialog_result = {}; cb = lambda r: (dialog_result.update({'result': r}), dialog_event.set())
+                    self.update_queue.put(('show_person_dialog', (image, person_obj['face_location'], person_obj['face_encoding'], cb))); dialog_event.wait()
+                    if person_result := dialog_result.get('result'):
+                        if person_id := self.create_or_update_person(person_result, conn): person_obj['person_id'] = person_id
         else: # Person without face
-            dialog_event = threading.Event(); dialog_result = {}; cb = lambda r: (dialog_result.update({'result': r}), dialog_event.set())
-            self.update_queue.put(('show_body_dialog', (image, person_obj['bbox'], cb))); dialog_event.wait()
-            if person_result := dialog_result.get('result'):
-                action = person_result['action']; person_id_to_assign = None
-                if action == 'existing': person_id_to_assign = person_result['person_id']
-                elif action == 'existing_ref': person_id_to_assign = self.get_or_create_person_by_name(person_result['person_info'], conn)
-                elif action == 'local_known':
-                    person_id_to_assign = self.create_or_update_person(person_result, conn)
-                    person_obj.update({'is_locally_identified': True, 'local_full_name': person_result['full_name'], 'local_short_name': person_result['short_name'], 'local_notes': person_result['notes']})
-                elif action == 'unknown': person_id_to_assign = self.create_or_update_person(person_result, conn)
-                if person_id_to_assign is not None and person_id_to_assign not in already_assigned_ids: person_obj['person_id'] = person_id_to_assign
-                elif person_id_to_assign is not None: self.log(f"  Skipped assignment of ID={person_id_to_assign} as it's already assigned in this photo.")
+            if self.auto_assign_unknown.get():
+                auto_result = {'action': 'unknown'}
+                if person_id := self.create_or_update_person(auto_result, conn): person_obj['person_id'] = person_id
+            else:
+                dialog_event = threading.Event(); dialog_result = {}; cb = lambda r: (dialog_result.update({'result': r}), dialog_event.set())
+                self.update_queue.put(('show_body_dialog', (image, person_obj['bbox'], cb))); dialog_event.wait()
+                if person_result := dialog_result.get('result'):
+                    action = person_result['action']; person_id_to_assign = None
+                    if action == 'existing': person_id_to_assign = person_result['person_id']
+                    elif action == 'existing_ref': person_id_to_assign = self.get_or_create_person_by_name(person_result['person_info'], conn)
+                    elif action == 'local_known':
+                        person_id_to_assign = self.create_or_update_person(person_result, conn)
+                        person_obj.update({'is_locally_identified': True, 'local_full_name': person_result['full_name'], 'local_short_name': person_result['short_name'], 'local_notes': person_result['notes']})
+                    elif action == 'unknown': person_id_to_assign = self.create_or_update_person(person_result, conn)
+                    if person_id_to_assign is not None and person_id_to_assign not in already_assigned_ids: person_obj['person_id'] = person_id_to_assign
+                    elif person_id_to_assign is not None: self.log(f"  Skipped assignment of ID={person_id_to_assign} as it's already assigned in this photo.")
         return person_obj
 
     def detect_dogs_torchvision(self, pil_image):
@@ -1318,13 +1717,17 @@ class FaceDetectionV2:
             dog_detections = self.detect_dogs_torchvision(oriented_pil_image)
             for dog in dog_detections:
                 if not self.processing: break
-                dialog_event = threading.Event(); dialog_result = {}; cb = lambda r: (dialog_result.update({'result': r}), dialog_event.set())
-                self.update_queue.put(('show_dog_dialog', (image, dog['bbox'], cb, dog['breed']))); dialog_event.wait()
-                if res := dialog_result.get('result'):
-                    if res['action'] == 'existing_ref': dog['dog_id'] = self.get_or_create_dog_by_name(res['dog_info'], conn)
-                    else:
-                        if res['action'] == 'new_known' and not res.get('breed'): res['breed'] = dog['breed']
-                        dog['dog_id'] = self.create_or_update_dog(res, conn)
+                if self.auto_assign_unknown.get():
+                    auto_result = {'action': 'unknown'}
+                    dog['dog_id'] = self.create_or_update_dog(auto_result, conn)
+                else:
+                    dialog_event = threading.Event(); dialog_result = {}; cb = lambda r: (dialog_result.update({'result': r}), dialog_event.set())
+                    self.update_queue.put(('show_dog_dialog', (image, dog['bbox'], cb, dog['breed']))); dialog_event.wait()
+                    if res := dialog_result.get('result'):
+                        if res['action'] == 'existing_ref': dog['dog_id'] = self.get_or_create_dog_by_name(res['dog_info'], conn)
+                        else:
+                            if res['action'] == 'new_known' and not res.get('breed'): res['breed'] = dog['breed']
+                            dog['dog_id'] = self.create_or_update_dog(res, conn)
             annotated_image = image.copy()
             for person in final_person_detections:
                 p_id = person.get('person_id'); name = person.get('local_short_name') or self.get_name_from_db(p_id, conn, 'person'); x1, y1, x2, y2 = person['bbox']
@@ -1355,7 +1758,7 @@ class FaceDetectionV2:
 
     def process_images(self):
         try:
-            source = self.source_dir.get(); image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.webp'}; image_files = []
+            source = self.source_dir.get(); image_extensions = IMAGE_EXTENSIONS; image_files = []
             if self.include_subdirs.get():
                 for root, _, files in os.walk(source):
                     for file in files:
@@ -1364,9 +1767,12 @@ class FaceDetectionV2:
                 for file in os.listdir(source):
                     if os.path.isfile(path := os.path.join(source, file)) and Path(file).suffix.lower() in image_extensions: image_files.append(path)
             self.log(f"Found {len(image_files)} images to process."); self.processed_decision_for_all = None
+            try: self.root.after(0, lambda: self.scan_progress.config(maximum=len(image_files), value=0))
+            except tk.TclError: pass
             for i, image_path in enumerate(image_files):
                 if not self.processing: self.log("Processing stopped by user."); break
-                self.update_status(self.lang.get('status_processing', current=i+1, total=len(image_files), filename=os.path.basename(image_path)), 'processing'); self.log(f"\nProcessing: {os.path.basename(image_path)}"); self.update_image(image_path)
+                pct = ((i+1) / len(image_files) * 100) if len(image_files) > 0 else 0
+                self.update_status(self.lang.get('status_processing', current=i+1, total=len(image_files), filename=os.path.basename(image_path)) + f" ({pct:.0f}%)", 'processing'); self.log(f"\nProcessing: {os.path.basename(image_path)}"); self.update_image(image_path)
                 if self.is_image_processed(image_path):
                     decision = self.processed_decision_for_all
                     if not decision:
@@ -1389,6 +1795,10 @@ class FaceDetectionV2:
                     self.update_image(image_path, annotated_image); self.log(f"  Found: {num_bodies} bodies, {num_faces} faces, {num_dogs} dogs.")
                     cursor.execute('UPDATE images SET num_bodies = ?, num_faces = ?, num_dogs = ? WHERE id = ?', (num_bodies, num_faces, num_dogs, image_id))
                     self.save_to_database(image_id, person_detections, dog_detections, conn)
+                try: self.root.after(0, lambda v=i+1: self.scan_progress.config(value=v))
+                except tk.TclError: pass
+            try: self.root.after(0, lambda: self.scan_progress.config(value=0))
+            except tk.TclError: pass
             self.log(f"\n{self.lang.get('status_complete')}!"); self.update_status(self.lang.get('status_complete'), 'complete'); self.update_queue.put(('refresh_people', None)); self.update_queue.put(('refresh_dogs', None))
         except Exception as e: self.log(f"Critical error in processing loop: {e}\n{traceback.format_exc()}"); self.update_status(self.lang.get('status_error'), 'error')
         finally: self.processing = False; self.update_queue.put(('enable_buttons', None))

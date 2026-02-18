@@ -1,0 +1,17 @@
+# Core dependencies
+face_recognition>=1.3.0
+ultralytics>=8.0.0
+torch>=2.0.0
+torchvision>=0.15.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+imagehash>=4.3.0
+
+# LLM API clients (optional - install those you need)
+openai>=1.0.0
+anthropic>=0.20.0
+google-generativeai>=0.5.0
+
+# Optional - iPhone HEIF/HEIC photo support
+pillow-heif>=0.13.0

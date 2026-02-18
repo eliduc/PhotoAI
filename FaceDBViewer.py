@@ -20,35 +20,11 @@ import sqlite3
 from datetime import datetime
 from PIL import Image, ImageTk, ImageDraw, ImageFont, ExifTags
 import json
+import csv
+from photo_utils import correct_image_orientation, setup_file_logger
 
 # Program Version
 VERSION = "1.7.7"
-
-def correct_image_orientation(image: Image.Image) -> Image.Image:
-    """Applies rotation/flip to a PIL image based on its EXIF orientation data."""
-    try:
-        exif = image.getexif()
-        orientation_tag = 0x0112
-
-        if orientation_tag in exif:
-            orientation = exif[orientation_tag]
-            if orientation == 2:
-                image = image.transpose(Image.FLIP_LEFT_RIGHT)
-            elif orientation == 3:
-                image = image.rotate(180, expand=True)
-            elif orientation == 4:
-                image = image.transpose(Image.FLIP_TOP_BOTTOM)
-            elif orientation == 5:
-                image = image.transpose(Image.FLIP_LEFT_RIGHT).rotate(270, expand=True)
-            elif orientation == 6:
-                image = image.rotate(270, expand=True)
-            elif orientation == 7:
-                image = image.transpose(Image.FLIP_LEFT_RIGHT).rotate(90, expand=True)
-            elif orientation == 8:
-                image = image.rotate(90, expand=True)
-    except (AttributeError, KeyError, IndexError):
-        pass
-    return image
 
 class EditPersonDialog(tk.Toplevel):
     """Dialog for editing information about a person."""
@@ -297,6 +273,7 @@ class FaceDBViewer:
         self.lang = tk.StringVar(value='EN')
         self.previous_selection_iid = None; self.active_tab_frame = None
         self.ai_edit_mode = False; self.ai_original_short = ""; self.ai_original_long = ""
+        self.file_logger = setup_file_logger('FaceDBViewer')
         self.setup_i18n()
         self.create_widgets()
         self.update_ui_language()
@@ -324,6 +301,7 @@ class FaceDBViewer:
                 'edit_person_dialog_title': "Edit Person Information", 'col_full_name': "Full Name", 'col_short_name': "Short Name", 'col_notes': "Notes", 'local_id_info': "Local identification is saved only for this specific photo.",
                 'warn_select_person': "Please select a person from the list.", 'warn_enter_fullname': "Please enter a full name.", 'warn_enter_fullname_local': "Please enter a full name for local identification.", 'confirm_remove_person_link': "Are you sure you want to remove the link to this person?",
                 'edit_dog_dialog_title': "Edit Dog Information", 'warn_select_dog': "Please select a dog from the list.", 'warn_enter_dog_name': "Please enter a nickname.", 'confirm_remove_dog_link': "Are you sure you want to remove the link to this dog?",
+                'export_btn': "Export CSV", 'export_success': "Data exported to: {}", 'export_no_db': "Please open a database first.",
             },
             'RU': {
                 'title': f"Просмотрщик баз данных лиц v{VERSION}", 'db_label': "База данных:", 'browse_btn': "Выбрать...", 'open_btn': "📂 Открыть",
@@ -345,6 +323,7 @@ class FaceDBViewer:
                 'edit_person_dialog_title': "Редактировать информацию о человеке", 'col_full_name': "Полное имя", 'col_short_name': "Короткое имя", 'col_notes': "Примечание", 'local_id_info': "Локальная идентификация сохраняется только для данного фото.",
                 'warn_select_person': "Выберите человека из списка.", 'warn_enter_fullname': "Введите полное имя.", 'warn_enter_fullname_local': "Введите полное имя для локальной идентификации.", 'confirm_remove_person_link': "Удалить связь с человеком?",
                 'edit_dog_dialog_title': "Редактировать информацию о собаке", 'warn_select_dog': "Выберите собаку из списка.", 'warn_enter_dog_name': "Введите кличку.", 'confirm_remove_dog_link': "Удалить связь с собакой?",
+                'export_btn': "Экспорт CSV", 'export_success': "Данные экспортированы в: {}", 'export_no_db': "Сначала откройте базу данных.",
             }
         }
 
@@ -371,6 +350,7 @@ class FaceDBViewer:
         self.version_label = ttk.Label(top_frame, text=f"v{VERSION}", font=('Arial', 9)); self.version_label.grid(row=0, column=7, sticky='e', padx=5)
         self.status_bar = ttk.Label(self.root, relief=tk.SUNKEN); self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
         bottom_frame = ttk.Frame(self.root, padding=(10, 5)); bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        self.export_button = ttk.Button(bottom_frame, command=self.export_data); self.export_button.pack(side=tk.RIGHT, padx=5)
         self.exit_button = ttk.Button(bottom_frame, command=self.root.destroy); self.exit_button.pack(side=tk.RIGHT)
         main_paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL); main_paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 0))
         left_frame = ttk.Frame(main_paned); main_paned.add(left_frame, weight=2)
@@ -407,7 +387,7 @@ class FaceDBViewer:
         self.edit_dog_btn.config(text=ld['edit_btn']); self.delete_dog_btn.config(text=ld['delete_btn'])
         self.dogs_tree.heading('#',text=ld['col_dog_index']); self.dogs_tree.heading('Name',text=ld['col_dog_name']); self.dogs_tree.heading('Breed',text=ld['col_breed'])
         self.dogs_tree.heading('Owner',text=ld['col_owner']); self.dogs_tree.heading('Status',text=ld['col_status']); self.dogs_tree.heading('ID',text=ld['col_id'])
-        self.exit_button.config(text=ld['exit_btn'])
+        self.export_button.config(text=ld['export_btn']); self.exit_button.config(text=ld['exit_btn'])
         self.ai_short_desc_label.config(text=ld['ai_short_desc']); self.ai_detailed_desc_label.config(text=ld['ai_detailed_desc'])
         current_ai_btn_text = self.edit_ai_btn.cget('text')
         if current_ai_btn_text == self.i18n['EN']['edit_btn'] or current_ai_btn_text == self.i18n['RU']['edit_btn']: self.edit_ai_btn.config(text=ld['edit_btn'])
@@ -667,6 +647,39 @@ class FaceDBViewer:
         short, long = self.ai_short_text.get('1.0', tk.END).strip(), self.ai_long_text.get('1.0', tk.END).strip()
         with sqlite3.connect(self.db_path.get()) as conn:
             conn.execute("UPDATE images SET ai_short_description=?, ai_long_description=? WHERE id=?", (short, long, self.current_image_id)); conn.commit()
+
+    def export_data(self):
+        ld = self.i18n[self.lang.get()]
+        if not self.db_path.get() or not os.path.exists(self.db_path.get()):
+            messagebox.showwarning(ld.get('warning', 'Warning'), ld['export_no_db']); return
+        save_path = filedialog.asksaveasfilename(defaultextension='.csv', filetypes=[("CSV files", "*.csv"), ("JSON files", "*.json")])
+        if not save_path: return
+        try:
+            with sqlite3.connect(self.db_path.get()) as conn:
+                conn.row_factory = sqlite3.Row; cursor = conn.cursor()
+                cursor.execute("""SELECT i.id, i.filename, i.filepath, i.created_date, i.file_size, i.num_bodies, i.num_faces, i.num_dogs,
+                    i.ai_short_description, i.ai_long_description, i.ai_llm_used, i.processed_date,
+                    GROUP_CONCAT(DISTINCT CASE WHEN p.is_known THEN p.short_name END) as known_people,
+                    GROUP_CONCAT(DISTINCT CASE WHEN d.is_known THEN d.name END) as known_dogs
+                    FROM images i
+                    LEFT JOIN person_detections pd ON i.id = pd.image_id LEFT JOIN persons p ON pd.person_id = p.id
+                    LEFT JOIN dog_detections dd ON i.id = dd.image_id LEFT JOIN dogs d ON dd.dog_id = d.id
+                    GROUP BY i.id ORDER BY i.filepath""")
+                rows = cursor.fetchall()
+                columns = rows[0].keys() if rows else []
+                if save_path.endswith('.json'):
+                    import json as json_mod
+                    data = [dict(row) for row in rows]
+                    with open(save_path, 'w', encoding='utf-8') as f:
+                        json_mod.dump(data, f, ensure_ascii=False, indent=2)
+                else:
+                    with open(save_path, 'w', newline='', encoding='utf-8') as f:
+                        writer = csv.writer(f)
+                        writer.writerow(columns)
+                        for row in rows: writer.writerow(list(row))
+            messagebox.showinfo('Export', ld['export_success'].format(save_path))
+        except Exception as e:
+            messagebox.showerror(ld.get('error', 'Error'), str(e))
 
     def _update_detection_tree(self, tree, query, extra_params=()):
         for item in tree.get_children(): tree.delete(item)

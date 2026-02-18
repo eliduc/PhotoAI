@@ -28,6 +28,7 @@ from datetime import datetime
 import shutil
 from pathlib import Path
 import traceback
+from photo_utils import correct_image_orientation, setup_file_logger
 
 # Optional library imports
 try:
@@ -115,21 +116,6 @@ LANGUAGES = {
 }
 
 # --- Helper Functions ---
-def correct_image_orientation(img: Image.Image) -> Image.Image:
-    try:
-        exif = img.getexif(); orientation_tag = 274
-        if orientation_tag in exif:
-            orientation = exif[orientation_tag]
-            if orientation == 2: img = img.transpose(Image.FLIP_LEFT_RIGHT)
-            elif orientation == 3: img = img.rotate(180, expand=True)
-            elif orientation == 4: img = img.transpose(Image.FLIP_TOP_BOTTOM)
-            elif orientation == 5: img = img.transpose(Image.FLIP_LEFT_RIGHT).rotate(270, expand=True)
-            elif orientation == 6: img = img.rotate(270, expand=True)
-            elif orientation == 7: img = img.transpose(Image.FLIP_LEFT_RIGHT).rotate(90, expand=True)
-            elif orientation == 8: img = img.rotate(90, expand=True)
-    except (AttributeError, KeyError, IndexError): pass
-    return img
-
 def get_image_base64(image_path, max_size=(2048, 2048)):
     try:
         with Image.open(image_path) as img:
@@ -215,6 +201,7 @@ class AIPhotoDescriptor:
         self.rename_dest_dir = tk.StringVar()
         self.openai_client, self.anthropic_client, self.gemini_model = None, None, None; self.processing = False
         self.update_queue = queue.Queue()
+        self.file_logger = setup_file_logger('AIPhotoDescription')
         self.create_widgets(); self.init_llm_clients(); self.process_queue(); self.update_ui_language()
 
     def create_widgets(self):
@@ -307,7 +294,7 @@ class AIPhotoDescriptor:
         try:
             while True:
                 action, data = self.update_queue.get_nowait()
-                if action == 'log': self.log_text.insert(tk.END, f"[{datetime.now().strftime('%H:%M:%S')}] {data}\n"); self.log_text.see(tk.END)
+                if action == 'log': self.log_text.insert(tk.END, f"[{datetime.now().strftime('%H:%M:%S')}] {data}\n"); self.log_text.see(tk.END); self.file_logger.info(data)
                 elif action == 'progress':
                     current, total = data; self.progress_bar['value'] = (current / total) * 100 if total > 0 else 0; self.progress_label.config(text=f"{current} / {total}")
                 elif action == 'show_edit_dialog': self.show_edit_dialog_main(data)
@@ -346,7 +333,7 @@ class AIPhotoDescriptor:
                 try: self.anthropic_client = anthropic.Anthropic(api_key=api_keys['ANTHROPIC']); available_llms.append('Anthropic')
                 except Exception as e: self.update_queue.put(('log', f"Anthropic client init error: {e}"))
             if genai and 'GEMINI' in api_keys and api_keys.get('GEMINI'):
-                try: genai.configure(api_key=api_keys['GEMINI']); self.gemini_model = genai.GenerativeModel('gemini-1.5-flash'); available_llms.append('Gemini')
+                try: genai.configure(api_key=api_keys['GEMINI']); self.gemini_model = genai.GenerativeModel('gemini-2.0-flash'); available_llms.append('Gemini')
                 except Exception as e: self.update_queue.put(('log', f"Gemini client init error: {e}"))
         else: self.update_queue.put(('log', "ERROR: Section [Keys] not found in 'keys-ai.ini'."))
         if hasattr(self, 'llm_combo'): self.llm_combo['values'] = available_llms; self.selected_llm.set(available_llms[0]) if available_llms else None
@@ -466,10 +453,10 @@ class AIPhotoDescriptor:
             except AttributeError: return None
 
     def generate_description_openai(self, base64_image, prompt):
-        response = self.openai_client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}], max_tokens=1000, response_format={"type": "json_object"})
+        response = self.openai_client.chat.completions.create(model="gpt-4.1-mini", messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}], max_tokens=1000, response_format={"type": "json_object"})
         return self.parse_llm_response(response.choices[0].message.content)
     def generate_description_anthropic(self, base64_image, prompt):
-        response = self.anthropic_client.messages.create(model="claude-3-haiku-20240307", max_tokens=1000, messages=[{"role": "user", "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64_image}}, {"type": "text", "text": prompt}]}])
+        response = self.anthropic_client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=1000, messages=[{"role": "user", "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64_image}}, {"type": "text", "text": prompt}]}])
         return self.parse_llm_response(response.content[0].text)
     def generate_description_gemini(self, pil_image, prompt):
         response = self.gemini_model.generate_content([prompt, pil_image]); return self.parse_llm_response(response.text)

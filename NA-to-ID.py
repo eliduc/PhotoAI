@@ -17,6 +17,7 @@ from datetime import datetime
 import threading
 import queue
 import os
+from photo_utils import backup_database, setup_file_logger
 
 VERSION = "1.2"
 
@@ -46,6 +47,7 @@ class UnknownIDGenerator:
         self.preview_data = None
         self.is_running = False
         self.update_queue = queue.Queue()
+        self.file_logger = setup_file_logger('NA_to_ID')
         self.language = tk.StringVar(value='EN')
 
         self.create_for_persons = tk.BooleanVar(value=True)
@@ -129,7 +131,8 @@ class UnknownIDGenerator:
                 'without_face': 'Without face',
                 'new': 'New',
                 'unknown': 'Unknown',
-                'auto_note': 'Auto: {}. Photo: {}, Index: {}'
+                'auto_note': 'Auto: {}. Photo: {}, Index: {}',
+                'backup_created': 'Database backup created: {}'
             },
             'RU': {
                 # UI elements
@@ -197,7 +200,8 @@ class UnknownIDGenerator:
                 'without_face': 'Без лица',
                 'new': 'Новый',
                 'unknown': 'Неизвестная',
-                'auto_note': 'Авто: {}. Фото: {}, Индекс: {}'
+                'auto_note': 'Авто: {}. Фото: {}, Индекс: {}',
+                'backup_created': 'Резервная копия базы данных создана: {}'
             }
         }
         self.strings = self.all_strings[self.language.get()]
@@ -375,6 +379,7 @@ class UnknownIDGenerator:
 
     def log(self, message):
         self.update_queue.put(('log', f"{datetime.now().strftime('%H:%M:%S')} - {message}\n"))
+        self.file_logger.info(message)
 
     def update_status(self, message, status_type):
         self.update_queue.put(('status', (message, status_type)))
@@ -549,7 +554,11 @@ class UnknownIDGenerator:
 
         self.update_status(self.strings['applying_changes'], "processing")
         self.log(self.strings['apply_title'])
-        
+
+        backup_path = backup_database(self.db_path.get())
+        if backup_path:
+            self.log(self.strings['backup_created'].format(backup_path))
+
         try:
             with sqlite3.connect(self.db_path.get()) as conn:
                 cursor = conn.cursor()
