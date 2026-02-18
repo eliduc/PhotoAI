@@ -712,7 +712,9 @@ class FaceDetectionV2:
                 elif action == 'refresh_people': self.refresh_people_list()
                 elif action == 'refresh_dogs': self.refresh_dogs_list()
         except queue.Empty: pass
-        finally: self.root.after(100, self.process_queue)
+        finally:
+            try: self.root.after(100, self.process_queue)
+            except tk.TclError: pass
 
     def _on_face_model_changed(self, event=None):
         """Update the internal model key when user changes the face model combobox."""
@@ -1381,7 +1383,7 @@ class FaceDetectionV2:
 
                 with sqlite3.connect(self.db_path, timeout=10) as conn:
                     cursor = conn.cursor(); cursor.execute('PRAGMA foreign_keys = ON;')
-                    file_stat = os.stat(image_path); created_date, now = datetime.fromtimestamp(file_stat.st_ctime).isoformat(), datetime.now().isoformat()
+                    file_stat = os.stat(image_path); birth_ts = getattr(file_stat, 'st_birthtime', None) or file_stat.st_mtime; created_date, now = datetime.fromtimestamp(birth_ts).isoformat(), datetime.now().isoformat()
                     cursor.execute('INSERT INTO images (filename, filepath, created_date, file_size, processed_date) VALUES (?, ?, ?, ?, ?)',(os.path.basename(image_path), image_path, created_date, file_stat.st_size, now)); image_id = cursor.lastrowid
                     num_bodies, num_faces, num_dogs, person_detections, annotated_image, dog_detections = self.analyze_image(image_path, image_id, conn)
                     self.update_image(image_path, annotated_image); self.log(f"  Found: {num_bodies} bodies, {num_faces} faces, {num_dogs} dogs.")

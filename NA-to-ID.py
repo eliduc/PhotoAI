@@ -406,7 +406,8 @@ class UnknownIDGenerator:
         except queue.Empty:
             pass
         finally:
-            self.root.after(100, self.process_queue)
+            try: self.root.after(100, self.process_queue)
+            except tk.TclError: pass
 
     def start_action(self, target_method):
         if self.is_running:
@@ -417,16 +418,19 @@ class UnknownIDGenerator:
 
         self.is_running = True
         # Schedule widget updates on the main thread (may be called from worker thread)
-        self.root.after(0, lambda: self.analyze_btn.config(state=tk.DISABLED))
-        self.root.after(0, lambda: self.preview_btn.config(state=tk.DISABLED))
-        self.root.after(0, lambda: self.apply_btn.config(state=tk.DISABLED))
+        try:
+            self.root.after(0, lambda: self.analyze_btn.config(state=tk.DISABLED))
+            self.root.after(0, lambda: self.preview_btn.config(state=tk.DISABLED))
+            self.root.after(0, lambda: self.apply_btn.config(state=tk.DISABLED))
+        except tk.TclError: pass
         thread = threading.Thread(target=target_method, daemon=True)
         thread.start()
 
     def end_action(self):
         self.is_running = False
         # Schedule widget updates on the main thread (Tkinter is not thread-safe)
-        self.root.after(0, lambda: self.analyze_btn.config(state=tk.NORMAL))
+        try: self.root.after(0, lambda: self.analyze_btn.config(state=tk.NORMAL))
+        except tk.TclError: pass
         if self.preview_data:
              self.update_queue.put(('toggle_buttons', ('normal', 'normal')))
         elif hasattr(self, 'analysis_result') and self.analysis_result:

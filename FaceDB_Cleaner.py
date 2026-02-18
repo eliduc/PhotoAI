@@ -50,12 +50,12 @@ try:
     import imagehash
 except ImportError:
     messagebox.showerror("Library Missing", "The 'ImageHash' library is required.\nPlease install it: pip install ImageHash")
-    exit()
+    raise
 try:
     import numpy as np
 except ImportError:
     messagebox.showerror("Library Missing", "The 'numpy' library is required.\nPlease install it: pip install numpy")
-    exit()
+    raise
 
 VERSION = "2.5"
 
@@ -765,7 +765,8 @@ class FaceDBCleanerGUI:
 
     def update_status(self, key, **kwargs):
         message = self.lang[key].format(**kwargs)
-        self.root.after(0, self._update_status_threadsafe, message, key)
+        try: self.root.after(0, self._update_status_threadsafe, message, key)
+        except tk.TclError: pass
         
     def _update_status_threadsafe(self, message, key):
         self.status_label.config(text=message)
@@ -799,7 +800,8 @@ class FaceDBCleanerGUI:
     def log(self, key, prefix="", suffix="", **kwargs):
         message = self.lang[key].format(**kwargs)
         full_message = prefix + message + suffix
-        self.root.after(0, self._log_threadsafe, full_message)
+        try: self.root.after(0, self._log_threadsafe, full_message)
+        except tk.TclError: pass
 
     def _log_threadsafe(self, message):
         self.log_text.config(state=tk.NORMAL)
@@ -904,7 +906,8 @@ class FaceDBCleanerGUI:
 
         except Exception as e:
             self.log("log_error_occurred", e=e, prefix="\n")
-            self.root.after(0, self._log_threadsafe, traceback.format_exc())
+            try: self.root.after(0, self._log_threadsafe, traceback.format_exc())
+            except tk.TclError: pass
             if conn:
                 conn.rollback()
                 self.update_status("status_error")
@@ -913,7 +916,8 @@ class FaceDBCleanerGUI:
                 conn.close()
             self.is_running = False
             # Schedule all final UI updates to be run in the main thread
-            self.root.after(0, self._finalize_ui_state)
+            try: self.root.after(0, self._finalize_ui_state)
+            except tk.TclError: pass
 
     def process_photo_duplicates(self, cursor):
         self.log("log_photo_search_start")
@@ -921,7 +925,8 @@ class FaceDBCleanerGUI:
         all_images = cursor.fetchall()
         
         # Configure progress bar in the main thread
-        self.root.after(0, lambda: self.progress_bar.config(maximum=len(all_images)))
+        try: self.root.after(0, lambda: self.progress_bar.config(maximum=len(all_images)))
+        except tk.TclError: pass
 
         hashes = {}
         self.log("log_hashing_images", count=len(all_images))
@@ -929,7 +934,8 @@ class FaceDBCleanerGUI:
         for i, (img_id, filepath, _, _, _) in enumerate(all_images):
             if not os.path.exists(filepath):
                 self.log("log_file_not_found", filepath=filepath)
-                self.root.after(0, self.progress_bar.step) # Still step the bar
+                try: self.root.after(0, self.progress_bar.step)
+                except tk.TclError: pass
                 continue # Skip to the next image
             try:
                 with Image.open(filepath) as img:
@@ -941,7 +947,8 @@ class FaceDBCleanerGUI:
                 self.log("log_file_read_error", filepath=filepath, e=e)
             
             # Update progress bar and status counter
-            self.root.after(0, self.progress_bar.step)
+            try: self.root.after(0, self.progress_bar.step)
+            except tk.TclError: pass
             # Update the text status less frequently to avoid flooding the event queue
             if (i + 1) % 25 == 0 or (i + 1) == len(all_images):
                 self.update_status("status_hashing", i=i+1, count=len(all_images))

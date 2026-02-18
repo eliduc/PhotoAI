@@ -85,6 +85,9 @@ TRANSLATIONS = {
         'log_copied': 'Log copied to clipboard.',
         
         # Error messages
+        'face_model_label': 'Face model:',
+        'face_model_note': 'HOG = fast, CNN = accurate (GPU recommended)',
+
         'error_title': 'Error',
         'error_no_db': 'Select an existing database file',
         'error_analysis': 'Analysis error: {error}',
@@ -136,6 +139,9 @@ TRANSLATIONS = {
         'log_copied': 'Лог скопирован в буфер обмена.',
         
         # Error messages
+        'face_model_label': 'Модель лиц:',
+        'face_model_note': 'HOG = быстро, CNN = точно (рекомендуется GPU)',
+
         'error_title': 'Ошибка',
         'error_no_db': 'Выберите существующий файл базы данных',
         'error_analysis': 'Ошибка анализа: {error}',
@@ -193,6 +199,7 @@ class FaceVectorsUpdater:
         # Variables
         self.db_path = tk.StringVar()
         self.is_running = False
+        self.face_model = tk.StringVar(value='hog')
         self.update_queue = queue.Queue()
         
         self.create_widgets()
@@ -217,6 +224,8 @@ class FaceVectorsUpdater:
         self.exit_btn.config(text=self.tr('exit_button'))
         self.log_frame.config(text=self.tr('log_title'))
         self.lang_label.config(text=self.tr('language_label'))
+        self.model_label.config(text=self.tr('face_model_label'))
+        self.model_note.config(text=self.tr('face_model_note'))
         
         # Update status with current status type
         current_status = getattr(self, 'current_status_type', 'idle')
@@ -256,6 +265,17 @@ class FaceVectorsUpdater:
         
         self.browse_btn = ttk.Button(top_frame, text=self.tr('choose_button'), command=self.browse_db)
         self.browse_btn.grid(row=0, column=1)
+
+        # Face model selection
+        model_frame = ttk.Frame(main_frame)
+        model_frame.pack(fill=tk.X, pady=(0, 5))
+        self.model_label = ttk.Label(model_frame, text=self.tr('face_model_label'))
+        self.model_label.pack(side=tk.LEFT, padx=(0, 5))
+        self.model_combo = ttk.Combobox(model_frame, textvariable=self.face_model,
+                                        values=['hog', 'cnn'], state='readonly', width=10)
+        self.model_combo.pack(side=tk.LEFT)
+        self.model_note = ttk.Label(model_frame, text=self.tr('face_model_note'), font=('Arial', 9, 'italic'))
+        self.model_note.pack(side=tk.LEFT, padx=(10, 0))
 
         # Control buttons
         control_frame = ttk.Frame(main_frame, padding=(0, 10))
@@ -351,7 +371,8 @@ class FaceVectorsUpdater:
         except queue.Empty:
             pass
         finally:
-            self.root.after(100, self.process_queue)
+            try: self.root.after(100, self.process_queue)
+            except tk.TclError: pass
 
     def start_action(self, target_method):
         if self.is_running: 
@@ -433,11 +454,11 @@ class FaceVectorsUpdater:
                         if not os.path.exists(image_path): 
                             continue
                         try:
-                            pil_image = Image.open(image_path)
-                            oriented_image = correct_image_orientation(pil_image)
-                            image_np = np.array(oriented_image)
+                            with Image.open(image_path) as pil_image:
+                                oriented_image = correct_image_orientation(pil_image)
+                                image_np = np.array(oriented_image)
                             
-                            face_locations = face_recognition.face_locations(image_np, model='hog')
+                            face_locations = face_recognition.face_locations(image_np, model=self.face_model.get())
                             if face_locations:
                                 face_encodings = face_recognition.face_encodings(image_np, face_locations)
                                 if face_encodings:

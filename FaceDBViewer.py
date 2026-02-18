@@ -668,21 +668,23 @@ class FaceDBViewer:
         with sqlite3.connect(self.db_path.get()) as conn:
             conn.execute("UPDATE images SET ai_short_description=?, ai_long_description=? WHERE id=?", (short, long, self.current_image_id)); conn.commit()
 
-    def _update_detection_tree(self, tree, query):
+    def _update_detection_tree(self, tree, query, extra_params=()):
         for item in tree.get_children(): tree.delete(item)
         if not self.current_image_id: return
         with sqlite3.connect(self.db_path.get()) as conn:
-            for row in conn.execute(query, (self.current_image_id,)): tree.insert('', tk.END, values=row[:-1], tags=(row[-1],))
+            params = extra_params + (self.current_image_id,)
+            for row in conn.execute(query, params): tree.insert('', tk.END, values=row[:-1], tags=(row[-1],))
 
     def show_people_info(self):
-        ld=self.i18n[self.lang.get()]; query=f"SELECT pd.person_index, CASE WHEN pd.has_face THEN '{ld['person_type_face']}' ELSE '{ld['person_type_noface']}' END, COALESCE(p.full_name, pd.local_full_name, '{ld['status_unknown']}'), CASE WHEN p.is_known THEN '{ld['status_known']}' WHEN pd.is_locally_identified THEN '{ld['status_local']}' ELSE '{ld['status_unknown']}' END, p.id, pd.id FROM person_detections pd LEFT JOIN persons p ON pd.person_id = p.id WHERE pd.image_id = ? ORDER BY pd.person_index"
-        self._update_detection_tree(self.people_tree, query)
+        ld=self.i18n[self.lang.get()]
+        query = "SELECT pd.person_index, CASE WHEN pd.has_face THEN ? ELSE ? END, COALESCE(p.full_name, pd.local_full_name, ?), CASE WHEN p.is_known THEN ? WHEN pd.is_locally_identified THEN ? ELSE ? END, p.id, pd.id FROM person_detections pd LEFT JOIN persons p ON pd.person_id = p.id WHERE pd.image_id = ? ORDER BY pd.person_index"
+        self._update_detection_tree(self.people_tree, query, (ld['person_type_face'], ld['person_type_noface'], ld['status_unknown'], ld['status_known'], ld['status_local'], ld['status_unknown']))
 
     def show_dogs_info(self):
         ld = self.i18n[self.lang.get()]; self.dogs_tree.delete(*self.dogs_tree.get_children())
         if not self.has_dogs: self.dogs_tree.insert('', tk.END, values=('', ld['unsupported_feature'], '')); return
-        query = f"SELECT dd.dog_index, d.name, d.breed, d.owner, CASE WHEN d.is_known THEN '{ld['status_known_fem']}' ELSE '{ld['status_unknown_fem']}' END, d.id, dd.id FROM dog_detections dd LEFT JOIN dogs d ON dd.dog_id = d.id WHERE dd.image_id = ? ORDER BY dd.dog_index"
-        self._update_detection_tree(self.dogs_tree, query)
+        query = "SELECT dd.dog_index, d.name, d.breed, d.owner, CASE WHEN d.is_known THEN ? ELSE ? END, d.id, dd.id FROM dog_detections dd LEFT JOIN dogs d ON dd.dog_id = d.id WHERE dd.image_id = ? ORDER BY dd.dog_index"
+        self._update_detection_tree(self.dogs_tree, query, (ld['status_known_fem'], ld['status_unknown_fem']))
 
     def _on_detection_select(self, type):
         is_person = (type == 'people'); tree = self.people_tree if is_person else self.dogs_tree

@@ -208,7 +208,7 @@ class InteractiveDialog(BaseDialog):
 # --- Main Application Class ---
 class AIPhotoDescriptor:
     def __init__(self, root):
-        self.root = root; self.root.title("AI Photo Description Generator"); self.root.geometry("1200x900")
+        self.root = root; self.root.geometry("1200x900")
         self.ui_language = tk.StringVar(value="RU"); self.lang = LANGUAGES[self.ui_language.get()]
         self.db_path = tk.StringVar(); self.selected_llm = tk.StringVar(value="OpenAI"); self.selected_filename_language = tk.StringVar(value="Русский")
         self.process_target_mode = tk.StringVar(value="if_empty"); self.interaction_mode = tk.StringVar(value="interactive")
@@ -288,6 +288,7 @@ class AIPhotoDescriptor:
 
     def update_ui_language(self, event=None):
         self.lang = LANGUAGES[self.ui_language.get()]
+        self.root.title(self.lang['window_title'])
         self.version_label.config(text=self.lang['version'])
         self.db_frame.config(text=self.lang['db_frame_title']); self.settings_frame.config(text=self.lang['settings_frame_title'])
         self.process_frame.config(text=self.lang['process_frame_title']); self.interaction_frame.config(text=self.lang['interaction_frame_title'])
@@ -314,7 +315,9 @@ class AIPhotoDescriptor:
                 elif action == 'task_finished':
                     self.process_button.config(state=tk.NORMAL); self.toggle_rename_button.config(state=tk.NORMAL); self.stop_button.config(state=tk.DISABLED)
         except queue.Empty: pass
-        finally: self.root.after(100, self.process_queue)
+        finally:
+            try: self.root.after(100, self.process_queue)
+            except tk.TclError: pass
 
     def browse_db(self):
         path = filedialog.askopenfilename(filetypes=[("SQLite Database", "*.db")])
