@@ -409,23 +409,24 @@ class UnknownIDGenerator:
             self.root.after(100, self.process_queue)
 
     def start_action(self, target_method):
-        if self.is_running: 
+        if self.is_running:
             return
-        if not self.db_path.get(): 
+        if not self.db_path.get():
             messagebox.showerror(self.strings['error'], self.strings['select_db_error'])
             return
-        
+
         self.is_running = True
-        self.analyze_btn.config(state=tk.DISABLED)
-        self.preview_btn.config(state=tk.DISABLED)
-        self.apply_btn.config(state=tk.DISABLED)
+        # Schedule widget updates on the main thread (may be called from worker thread)
+        self.root.after(0, lambda: self.analyze_btn.config(state=tk.DISABLED))
+        self.root.after(0, lambda: self.preview_btn.config(state=tk.DISABLED))
+        self.root.after(0, lambda: self.apply_btn.config(state=tk.DISABLED))
         thread = threading.Thread(target=target_method, daemon=True)
         thread.start()
 
     def end_action(self):
         self.is_running = False
-        self.analyze_btn.config(state=tk.NORMAL)
-        # State of other buttons will be set by method logic
+        # Schedule widget updates on the main thread (Tkinter is not thread-safe)
+        self.root.after(0, lambda: self.analyze_btn.config(state=tk.NORMAL))
         if self.preview_data:
              self.update_queue.put(('toggle_buttons', ('normal', 'normal')))
         elif hasattr(self, 'analysis_result') and self.analysis_result:

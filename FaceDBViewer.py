@@ -25,17 +25,25 @@ import json
 VERSION = "1.7.7"
 
 def correct_image_orientation(image: Image.Image) -> Image.Image:
-    """Applies rotation to a PIL image based on its EXIF data."""
+    """Applies rotation/flip to a PIL image based on its EXIF orientation data."""
     try:
         exif = image.getexif()
         orientation_tag = 0x0112
 
         if orientation_tag in exif:
             orientation = exif[orientation_tag]
-            if orientation == 3:
+            if orientation == 2:
+                image = image.transpose(Image.FLIP_LEFT_RIGHT)
+            elif orientation == 3:
                 image = image.rotate(180, expand=True)
+            elif orientation == 4:
+                image = image.transpose(Image.FLIP_TOP_BOTTOM)
+            elif orientation == 5:
+                image = image.transpose(Image.FLIP_LEFT_RIGHT).rotate(270, expand=True)
             elif orientation == 6:
                 image = image.rotate(270, expand=True)
+            elif orientation == 7:
+                image = image.transpose(Image.FLIP_LEFT_RIGHT).rotate(90, expand=True)
             elif orientation == 8:
                 image = image.rotate(90, expand=True)
     except (AttributeError, KeyError, IndexError):
@@ -308,7 +316,7 @@ class FaceDBViewer:
                 'people_on_photo': "People in Photo:", 'edit_btn': "Edit", 'delete_btn': "Delete", 'save_btn': "Save",
                 'col_person_index': "#", 'col_type': "Type", 'col_person_name': "Name", 'col_status': "Status", 'person_type_face': "With Face",
                 'person_type_noface': "No Face", 'status_known': "Known", 'status_local': "Local", 'status_unknown': "Unknown", 'dogs_on_photo': "Dogs in Photo:",
-                'col_dog_index': "#", 'col_dog_name': "Nickname", 'col_breed': "Breed", 'col_owner': "Owner", 'unsupported_feature': "Not Supported", 'status_known_fem': "Known", 'status_unknown_fem': "Unknown",
+                'col_dog_index': "#", 'col_dog_name': "Nickname", 'col_breed': "Breed", 'col_owner': "Owner", 'col_dog_singular': "Dog", 'unsupported_feature': "Not Supported", 'status_known_fem': "Known", 'status_unknown_fem': "Unknown",
                 'confirm_delete_title': "Confirm Deletion", 'confirm_delete_msg': "Are you sure you want to permanently delete this detection from the photo?",
                 'ai_short_desc': "Short Description:", 'ai_detailed_desc': "Detailed Description:",
                 'unsaved_changes_title': "Unsaved Changes", 'unsaved_changes_msg': "You have unsaved changes in AI Descriptions. Do you want to save them?",
@@ -329,7 +337,7 @@ class FaceDBViewer:
                 'people_on_photo': "Люди на фото:", 'edit_btn': "Редактировать", 'delete_btn': "Удалить", 'save_btn': "Сохранить",
                 'col_person_index': "#", 'col_type': "Тип", 'col_person_name': "Имя", 'col_status': "Статус", 'person_type_face': "С лицом", 'person_type_noface': "Без лица",
                 'status_known': "Известный", 'status_local': "Локальный", 'status_unknown': "Неизвестный", 'dogs_on_photo': "Собаки на фото:",
-                'col_dog_index': "#", 'col_dog_name': "Кличка", 'col_breed': "Порода", 'col_owner': "Владелец", 'unsupported_feature': "Не поддерживается", 'status_known_fem': "Известная", 'status_unknown_fem': "Неизвестная",
+                'col_dog_index': "#", 'col_dog_name': "Кличка", 'col_breed': "Порода", 'col_owner': "Владелец", 'col_dog_singular': "Собака", 'unsupported_feature': "Не поддерживается", 'status_known_fem': "Известная", 'status_unknown_fem': "Неизвестная",
                 'confirm_delete_title': "Подтвердите удаление", 'confirm_delete_msg': "Вы уверены, что хотите навсегда удалить это обнаружение с фотографии?",
                 'ai_short_desc': "Краткое описание:", 'ai_detailed_desc': "Детальное описание:",
                 'unsaved_changes_title': "Несохраненные изменения", 'unsaved_changes_msg': "В AI описаниях есть несохраненные изменения. Хотите сохранить их?",
@@ -575,7 +583,7 @@ class FaceDBViewer:
                 if self.has_dogs:
                     q_d = "SELECT dd.id, dd.bbox, d.is_known, d.name, dd.dog_index FROM dog_detections dd LEFT JOIN dogs d ON dd.dog_id=d.id WHERE dd.image_id=?"
                     for det_id, bbox_js, is_known, name, index in conn.execute(q_d, (self.current_image_id,)):
-                        is_hl, t_dog = (self.highlighted_dog_detection_id == det_id), ld['col_dogs'][:-1] if ld['col_dogs'].endswith('s') else ld['col_dogs']
+                        is_hl, t_dog = (self.highlighted_dog_detection_id == det_id), ld['col_dog_singular']
                         color, text = ("#800080",f"{t_dog} #{index}: {name}") if is_known else ("orange",f"{t_dog} #{index}")
                         self._draw_box_and_text(draw, json.loads(bbox_js), text, color, is_hl, font, h_font)
             self.image_label.update_idletasks()

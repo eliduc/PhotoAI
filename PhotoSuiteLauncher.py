@@ -40,7 +40,8 @@ TRANSLATIONS = {
         "db_viewer": "DB Viewer", "vector_updater": "Update Face\nVectors", "db_cleaner": "Clean Database",
         "na_to_id": "NA ➔ ID", "error_title": "Error", "starting": "Starting...",
         "file_not_found": "File {script} not found in the application directory.",
-        "failed_to_launch": "Failed to launch {label}: {e}", "version": "v{version} • July 2025"
+        "failed_to_launch": "Failed to launch {label}: {e}", "version": "v{version} • July 2025",
+        "icon_folder_missing": "Folder 'icons' not found.", "icon_load_error": "Failed to load icon: {path}"
     },
     "RU": {
         "title": "Фото‑Инструменты – Единый Запуск", "select_module": "Выберите модуль для запуска:",
@@ -48,7 +49,8 @@ TRANSLATIONS = {
         "db_viewer": "Просмотр БД", "vector_updater": "Обновление\nвекторов лиц", "db_cleaner": "Очистка базы",
         "na_to_id": "NA ➔ ID", "error_title": "Ошибка", "starting": "Запускается...",
         "file_not_found": "Файл {script} не найден рядом с программой.",
-        "failed_to_launch": "Не удалось запустить {label}: {e}", "version": "v{version} • Июль 2025"
+        "failed_to_launch": "Не удалось запустить {label}: {e}", "version": "v{version} • Июль 2025",
+        "icon_folder_missing": "Папка 'icons' не найдена.", "icon_load_error": "Не удалось загрузить иконку: {path}"
     }
 }
 
@@ -141,9 +143,10 @@ class LauncherApp:
 
     def _load_icons(self):
         loaded_icons = {}
-        icon_dir = Path('icons')
+        icon_dir = Path(__file__).parent / 'icons'
+        T = TRANSLATIONS[self.current_lang]
         if not icon_dir.is_dir():
-            messagebox.showerror('Ошибка', "Папка 'icons' не найдена.")
+            messagebox.showerror(T['error_title'], T['icon_folder_missing'])
             return None
 
         for key, data in SCRIPTS.items():
@@ -155,7 +158,7 @@ class LauncherApp:
                 large = Image.open(icon_path).resize((96, 96), Image.LANCZOS)
                 loaded_icons[f"{key}_large"] = ImageTk.PhotoImage(large)
             except Exception:
-                messagebox.showerror('Ошибка иконки', f'Не удалось загрузить иконку: {icon_path}')
+                messagebox.showerror(T['error_title'], T['icon_load_error'].format(path=icon_path))
                 return None
         return loaded_icons
 

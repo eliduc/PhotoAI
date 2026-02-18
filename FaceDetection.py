@@ -362,14 +362,18 @@ class StdOutRedirector:
             self._buffer = ''
 
 def orient_image(img: Image.Image) -> Image.Image:
-    """Applies rotation to an image based on its EXIF data."""
+    """Applies rotation/flip to an image based on its EXIF orientation data."""
     try:
         exif = img.getexif()
         orientation_tag = 274
         if orientation_tag in exif:
             orientation = exif[orientation_tag]
-            if orientation == 3: img = img.rotate(180, expand=True)
+            if orientation == 2: img = img.transpose(Image.FLIP_LEFT_RIGHT)
+            elif orientation == 3: img = img.rotate(180, expand=True)
+            elif orientation == 4: img = img.transpose(Image.FLIP_TOP_BOTTOM)
+            elif orientation == 5: img = img.transpose(Image.FLIP_LEFT_RIGHT).rotate(270, expand=True)
             elif orientation == 6: img = img.rotate(270, expand=True)
+            elif orientation == 7: img = img.transpose(Image.FLIP_LEFT_RIGHT).rotate(90, expand=True)
             elif orientation == 8: img = img.rotate(90, expand=True)
     except (AttributeError, KeyError, IndexError):
         pass
@@ -942,8 +946,6 @@ class FaceDetectionV2:
                 add_column_if_not_exists('images', 'ai_short_description', 'TEXT'); add_column_if_not_exists('images', 'ai_long_description', 'TEXT')
                 add_column_if_not_exists('images', 'ai_processed_date', 'TEXT'); add_column_if_not_exists('images', 'ai_llm_used', 'TEXT')
                 add_column_if_not_exists('images', 'ai_language', 'TEXT'); add_column_if_not_exists('dog_detections', 'breed_source', 'TEXT')
-                
-                cursor.execute('PRAGMA foreign_keys = ON;')
             return True
         except Exception as e: messagebox.showerror(self.lang.get('error_title'), self.lang.get('db_create_error', e=e)); return False
 

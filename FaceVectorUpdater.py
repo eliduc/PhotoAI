@@ -146,15 +146,19 @@ TRANSLATIONS = {
 
 
 def correct_image_orientation(image: Image.Image) -> Image.Image:
-    """Applies rotation to PIL image based on its EXIF data."""
+    """Applies rotation/flip to PIL image based on its EXIF orientation data."""
     try:
         exif = image.getexif()
         orientation_tag = next((k for k, v in ExifTags.TAGS.items() if v == 'Orientation'), None)
 
         if orientation_tag in exif:
             orientation = exif[orientation_tag]
-            if orientation == 3: image = image.rotate(180, expand=True)
+            if orientation == 2: image = image.transpose(Image.FLIP_LEFT_RIGHT)
+            elif orientation == 3: image = image.rotate(180, expand=True)
+            elif orientation == 4: image = image.transpose(Image.FLIP_TOP_BOTTOM)
+            elif orientation == 5: image = image.transpose(Image.FLIP_LEFT_RIGHT).rotate(270, expand=True)
             elif orientation == 6: image = image.rotate(270, expand=True)
+            elif orientation == 7: image = image.transpose(Image.FLIP_LEFT_RIGHT).rotate(90, expand=True)
             elif orientation == 8: image = image.rotate(90, expand=True)
     except (AttributeError, KeyError, IndexError):
         pass # Ignore errors if EXIF is missing or incorrect

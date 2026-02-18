@@ -120,8 +120,12 @@ def correct_image_orientation(img: Image.Image) -> Image.Image:
         exif = img.getexif(); orientation_tag = 274
         if orientation_tag in exif:
             orientation = exif[orientation_tag]
-            if orientation == 3: img = img.rotate(180, expand=True)
+            if orientation == 2: img = img.transpose(Image.FLIP_LEFT_RIGHT)
+            elif orientation == 3: img = img.rotate(180, expand=True)
+            elif orientation == 4: img = img.transpose(Image.FLIP_TOP_BOTTOM)
+            elif orientation == 5: img = img.transpose(Image.FLIP_LEFT_RIGHT).rotate(270, expand=True)
             elif orientation == 6: img = img.rotate(270, expand=True)
+            elif orientation == 7: img = img.transpose(Image.FLIP_LEFT_RIGHT).rotate(90, expand=True)
             elif orientation == 8: img = img.rotate(90, expand=True)
     except (AttributeError, KeyError, IndexError): pass
     return img
