@@ -863,18 +863,33 @@ class FaceDBCleanerGUI:
             cursor.execute("PRAGMA foreign_keys = ON;")
 
             results = {'exact_persons': 0, 'dogs': 0, 'photos': 0, 'similar_persons': 0}
+            paths_to_delete_physically = []
 
             if self.clean_people_var.get():
                 results['exact_persons'] = self.merge_exact_duplicates(cursor, 'persons')
             if self.clean_dogs_var.get():
                 results['dogs'] = self.merge_exact_duplicates(cursor, 'dogs')
             if self.clean_photos_var.get():
-                results['photos'] = self.process_photo_duplicates(cursor)
+                photo_count, photo_paths = self.process_photo_duplicates(cursor)
+                results['photos'] = photo_count
+                paths_to_delete_physically = photo_paths
             if self.clean_similar_faces_var.get():
                 results['similar_persons'] = self.process_similar_faces(cursor)
 
             if any(results.values()):
                 conn.commit()
+                # Delete physical files AFTER successful commit to prevent data loss
+                if paths_to_delete_physically:
+                    self.log("log_deleting_physically")
+                    deleted_count = 0
+                    for fpath in paths_to_delete_physically:
+                        try:
+                            if os.path.exists(fpath):
+                                os.remove(fpath)
+                                deleted_count += 1
+                        except OSError as e:
+                            self.log("log_physical_delete_error", fpath=fpath, e=e)
+                    self.log("log_physical_deleted_count", count=deleted_count)
                 self.log("log_all_changes_saved", prefix="\n------------------------------------\n")
                 if results['exact_persons'] > 0: self.log("log_merged_people", count=results['exact_persons'])
                 if results['dogs'] > 0: self.log("log_merged_dogs", count=results['dogs'])
@@ -958,7 +973,7 @@ class FaceDBCleanerGUI:
 
         if not groups:
             self.log("log_no_photo_duplicates")
-            return 0
+            return 0, []
 
         self.log("log_found_photo_groups", count=len(groups))
         dialog_result = None
@@ -976,7 +991,7 @@ class FaceDBCleanerGUI:
 
         if not dialog_result or not dialog_result['delete_ids']:
             self.log("log_photo_delete_cancelled")
-            return 0
+            return 0, []
 
         ids_to_delete = dialog_result['delete_ids']
         self.log("log_deleting_photos_from_db", count=len(ids_to_delete))
@@ -1002,18 +1017,7 @@ class FaceDBCleanerGUI:
         cursor.execute(f"DELETE FROM images WHERE id IN ({placeholders})", ids_to_delete)
         self.log("log_deleted_main_from_images", count=cursor.rowcount)
 
-        if paths_to_delete_physically:
-            self.log("log_deleting_physically")
-            deleted_count = 0
-            for fpath in paths_to_delete_physically:
-                try:
-                    if os.path.exists(fpath):
-                        os.remove(fpath)
-                        deleted_count += 1
-                except OSError as e:
-                    self.log("log_physical_delete_error", fpath=fpath, e=e)
-            self.log("log_physical_deleted_count", count=deleted_count)
-        return len(ids_to_delete)
+        return len(ids_to_delete), paths_to_delete_physically
 
     def merge_exact_duplicates(self, cursor, table_name='persons'):
         if table_name == 'persons':

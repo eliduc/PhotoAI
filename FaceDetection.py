@@ -641,6 +641,7 @@ class FaceDetectionV2:
         
         self.update_queue = queue.Queue()
         self.source_dir = tk.StringVar(value=""); self.db_path_var = tk.StringVar(value=""); self.ref_db_path_var = tk.StringVar(value="")
+        self.face_model_internal = 'hog'  # Language-independent model key: 'hog' or 'cnn'
         self.face_model = tk.StringVar(value=self.lang.get('face_model_fast'))
         self.include_subdirs = tk.BooleanVar(value=False)
         self.face_threshold = tk.DoubleVar(value=0.6)
@@ -709,6 +710,14 @@ class FaceDetectionV2:
         except queue.Empty: pass
         finally: self.root.after(100, self.process_queue)
 
+    def _on_face_model_changed(self, event=None):
+        """Update the internal model key when user changes the face model combobox."""
+        current_val = self.face_model.get()
+        if current_val == self.lang.get('face_model_accurate'):
+            self.face_model_internal = 'cnn'
+        else:
+            self.face_model_internal = 'hog'
+
     def on_language_change(self, *args):
         """Callback function to update all UI text when the language is changed."""
         # Main window title
@@ -734,6 +743,10 @@ class FaceDetectionV2:
         
         self.face_model_lbl.config(text=self.lang.get('face_model_label'))
         self.face_model_combo.config(values=[self.lang.get('face_model_fast'), self.lang.get('face_model_accurate')])
+        if self.face_model_internal == 'cnn':
+            self.face_model.set(self.lang.get('face_model_accurate'))
+        else:
+            self.face_model.set(self.lang.get('face_model_fast'))
         
         self.face_thresh_lbl.config(text=self.lang.get('face_threshold_label'))
         self.face_thresh_note_lbl.config(text=self.lang.get('threshold_note'))
@@ -813,6 +826,7 @@ class FaceDetectionV2:
         self.face_model_lbl = ttk.Label(self.dir_frame, text=self.lang.get('face_model_label')); self.face_model_lbl.grid(row=3, column=0, sticky=tk.W, pady=5)
         self.face_model_combo = ttk.Combobox(self.dir_frame, textvariable=self.face_model, values=[self.lang.get('face_model_fast'), self.lang.get('face_model_accurate')], state='readonly', width=18)
         self.face_model_combo.grid(row=3, column=1, padx=5, sticky=tk.W)
+        self.face_model_combo.bind('<<ComboboxSelected>>', self._on_face_model_changed)
 
         self.face_thresh_lbl = ttk.Label(self.dir_frame, text=self.lang.get('face_threshold_label')); self.face_thresh_lbl.grid(row=4, column=0, sticky=tk.W, pady=5)
         threshold_frame = ttk.Frame(self.dir_frame); threshold_frame.grid(row=4, column=1, columnspan=3, sticky=tk.W)
@@ -1144,7 +1158,9 @@ class FaceDetectionV2:
             self.log(f"  Added an unknown person (ID: {person_id})")
         elif result['action'] == 'existing':
             person_id = result['person_id']; self.log(f"  Selected existing person (ID: {person_id})")
-        elif result['action'] == 'existing_ref': pass
+        elif result['action'] == 'existing_ref':
+            person_id = self.get_or_create_person_by_name(result['person_info'], conn)
+            self.log(f"  Imported person from Reference DB (ID: {person_id})")
         return person_id
 
     def create_or_update_dog(self, result, conn):
@@ -1264,7 +1280,7 @@ class FaceDetectionV2:
                         x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy()); confidence = float(box.conf[0])
                         person_detections.append({'person_index': i, 'bbox': [x1, y1, x2, y2], 'confidence': confidence, 'has_face': False})
             self.log(f"  YOLO detected: {len(person_detections)} person(s).")
-            model_name = 'cnn' if self.lang.get('face_model_accurate') in self.face_model.get() else 'hog'
+            model_name = self.face_model_internal
             self.log(f"  Using face recognition model: {model_name.upper()}")
             face_locations = face_recognition.face_locations(rgb_image, model=model_name)
             face_encodings = face_recognition.face_encodings(rgb_image, face_locations); self.log(f"  Found {len(face_locations)} face(s).")

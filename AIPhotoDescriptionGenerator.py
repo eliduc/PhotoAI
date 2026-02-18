@@ -211,7 +211,7 @@ class AIPhotoDescriptor:
         self.rename_dest_dir = tk.StringVar()
         self.openai_client, self.anthropic_client, self.gemini_model = None, None, None; self.processing = False
         self.update_queue = queue.Queue()
-        self.init_llm_clients(); self.create_widgets(); self.process_queue(); self.update_ui_language()
+        self.create_widgets(); self.init_llm_clients(); self.process_queue(); self.update_ui_language()
 
     def create_widgets(self):
         header_frame = ttk.Frame(self.root, padding=(10, 5, 10, 0)); header_frame.pack(fill=tk.X)
@@ -367,7 +367,8 @@ class AIPhotoDescriptor:
                 
                 short_d, long_d = self.get_existing_description(image_id)
                 final_desc_dict = None
-                
+                result = None  # Reset per iteration to prevent state leaking from previous image
+
                 if self.interaction_mode.get() == 'interactive':
                     if short_d and mode == 'all': # Interactive, has description, and processing all
                         dialog_event = threading.Event(); dialog_res = {}
@@ -377,8 +378,8 @@ class AIPhotoDescriptor:
                         if result['status'] == 'cancel_all': break
                         if result['status'] == 'save': final_desc_dict = result.get('data')
                         if result['status'] == 'reprocess': pass # Fall through
-                    
-                    if not short_d or (locals().get('result') and result['status'] == 'reprocess'): # No description OR user requested reprocess
+
+                    if not short_d or (result and result['status'] == 'reprocess'): # No description OR user requested reprocess
                         persons = self.get_persons_for_image(image_id); dogs = self.get_dogs_for_image(image_id)
                         new_data = self.generate_description(image_path, persons, dogs)
                         if new_data:
@@ -395,7 +396,7 @@ class AIPhotoDescriptor:
                         conn.cursor().execute("UPDATE images SET ai_short_description=?, ai_long_description=?, ai_processed_date=?, ai_llm_used=?, ai_language=? WHERE id=?",
                             (final_desc_dict['short'], final_desc_dict['long'], datetime.now().isoformat(), self.selected_llm.get(), self.selected_filename_language.get(), image_id))
                     self.update_queue.put(('log', self.lang['saving_description_for'].format(filename=os.path.basename(image_path))))
-                elif locals().get('result') is None and self.interaction_mode.get() == 'interactive':
+                elif result is None and self.interaction_mode.get() == 'interactive':
                     self.update_queue.put(('log', self.lang['processing_cancelled_for'].format(filename=os.path.basename(image_path))))
             
             if self.processing: self.update_queue.put(('log', self.lang['processing_finished']))

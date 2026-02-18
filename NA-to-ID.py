@@ -586,14 +586,15 @@ class UnknownIDGenerator:
             
             self.preview_data = None
             self.update_queue.put(('toggle_buttons', ('disabled', 'disabled')))
+            self.is_running = False  # Reset flag so start_action can launch re-analysis
             self.start_action(self.analyze_database)  # Re-analyze
         except Exception as e:
             self.log(self.strings['apply_error'].format(e))
             self.update_status(self.strings['apply_error_status'].format(e), "error")
             messagebox.showerror(self.strings['error'], self.strings['apply_error'].format(e))
         finally:
-            # end_action will be called from re-analysis
-            pass
+            if not self.is_running:  # Only call end_action if re-analysis didn't start
+                self.end_action()
 
 def main():
     root = tk.Tk()
