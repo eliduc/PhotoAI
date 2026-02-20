@@ -152,6 +152,9 @@ localization = {
         'undo_button': "Undo",
         'undo_success': "Last operation undone successfully.",
         'undo_empty': "Nothing to undo.",
+        'dialog_timeout_label': "Dialog timeout (sec):",
+        'dialog_timeout_note': "(0 = no timeout)",
+        'dialog_countdown': "Auto-close in {sec} sec...",
     },
     'RU': {
         # Main Window
@@ -247,6 +250,9 @@ localization = {
         'undo_button': "Отменить",
         'undo_success': "Последняя операция успешно отменена.",
         'undo_empty': "Нечего отменять.",
+        'dialog_timeout_label': "Таймаут диалогов (сек):",
+        'dialog_timeout_note': "(0 = без таймаута)",
+        'dialog_countdown': "Автозакрытие через {sec} сек...",
     },
     'IT': {
         # Main Window
@@ -342,6 +348,9 @@ localization = {
         'undo_button': "Annulla",
         'undo_success': "Ultima operazione annullata con successo.",
         'undo_empty': "Niente da annullare.",
+        'dialog_timeout_label': "Timeout dialoghi (sec):",
+        'dialog_timeout_note': "(0 = nessun timeout)",
+        'dialog_countdown': "Chiusura automatica tra {sec} sec...",
     }
 }
 
@@ -393,7 +402,7 @@ class StdOutRedirector:
             self._buffer = ''
 
 class BaseDialog(tk.Toplevel):
-    """Base class for all dialog windows with improved centering."""
+    """Base class for all dialog windows with improved centering and optional countdown."""
     def center_window(self):
         self.update_idletasks()
         req_width = self.winfo_reqwidth()
@@ -405,8 +414,37 @@ class BaseDialog(tk.Toplevel):
         y = max(y, 20)
         self.geometry(f'{req_width}x{req_height}+{x}+{y}')
 
+    def start_countdown(self, timeout_seconds, default_action, lang_manager):
+        """Start a countdown timer. Shows remaining time and calls default_action when it reaches 0."""
+        if timeout_seconds <= 0:
+            return
+        self._countdown_remaining = timeout_seconds
+        self._countdown_action = default_action
+        self._countdown_lang = lang_manager
+        self._countdown_label = ttk.Label(self, text="", font=('Arial', 10, 'bold'), foreground='red')
+        self._countdown_label.pack(side=tk.BOTTOM, pady=(0, 5))
+        # Lift countdown label above button frames
+        self._countdown_label.lift()
+        self._update_countdown()
+
+    def _update_countdown(self):
+        """Update the countdown label every second."""
+        if not self.winfo_exists():
+            return
+        if self._countdown_remaining <= 0:
+            try:
+                self._countdown_action()
+            except tk.TclError:
+                pass
+            return
+        self._countdown_label.config(
+            text=self._countdown_lang.get('dialog_countdown', sec=self._countdown_remaining)
+        )
+        self._countdown_remaining -= 1
+        self._countdown_timer_id = self.after(1000, self._update_countdown)
+
 class ProcessedImageDialog(BaseDialog):
-    def __init__(self, parent, image_path, lang_manager):
+    def __init__(self, parent, image_path, lang_manager, timeout=0):
         super().__init__(parent)
         self.parent = parent; self.result = None; self.apply_to_all = False
         self.lang = lang_manager
@@ -422,12 +460,13 @@ class ProcessedImageDialog(BaseDialog):
         ttk.Button(button_frame, text=self.lang.get('no_skip_button'), command=self.skip).pack(side=tk.LEFT, padx=5, expand=True)
         ttk.Button(button_frame, text=self.lang.get('cancel_button'), command=self.cancel).pack(side=tk.RIGHT, padx=5, expand=True)
         self.center_window()
+        self.start_countdown(timeout, self.skip, self.lang)
     def process(self): self.result = 'process'; self.apply_to_all = self.apply_to_all_var.get(); self.destroy()
     def skip(self): self.result = 'skip'; self.apply_to_all = self.apply_to_all_var.get(); self.destroy()
     def cancel(self): self.result = 'cancel'; self.destroy()
 
 class PersonDialog(BaseDialog):
-    def __init__(self, parent, image, face_location, lang_manager, existing_persons=None, ref_persons=None, db_path=None):
+    def __init__(self, parent, image, face_location, lang_manager, existing_persons=None, ref_persons=None, db_path=None, timeout=0):
         super().__init__(parent)
         self.parent = parent; self.result = None; self.lang = lang_manager
         self.existing_persons = existing_persons or []; self.ref_persons = ref_persons or []; self.db_path = db_path
@@ -467,6 +506,7 @@ class PersonDialog(BaseDialog):
         ttk.Button(left_buttons, text=self.lang.get('leave_unknown_button'), command=self.save_unknown).pack(side=tk.LEFT, padx=5)
         ttk.Button(right_buttons, text=self.lang.get('cancel_button'), command=self.cancel).pack(side=tk.RIGHT, padx=5)
         self.center_window(); self.full_name_var.set(""); self.notebook.select(0); self.after(100, lambda: self.focus_force())
+        self.start_countdown(timeout, self.save_unknown, self.lang)
 
     def check_person_exists(self, full_name, short_name):
         if not self.db_path: return False, []
@@ -494,7 +534,7 @@ class PersonDialog(BaseDialog):
     def cancel(self): self.result = None; self.destroy()
 
 class DogDialog(BaseDialog):
-    def __init__(self, parent, image, dog_bbox, lang_manager, existing_dogs=None, ref_dogs=None, db_path=None, breed=None):
+    def __init__(self, parent, image, dog_bbox, lang_manager, existing_dogs=None, ref_dogs=None, db_path=None, breed=None, timeout=0):
         super().__init__(parent); self.parent = parent; self.result = None; self.lang = lang_manager
         self.existing_dogs = existing_dogs or []; self.ref_dogs = ref_dogs or []; self.db_path = db_path
         self.title(self.lang.get('dog_dialog_title')); self.resizable(True, True); self.transient(parent); self.grab_set(); self.protocol("WM_DELETE_WINDOW", self.save_unknown)
@@ -534,6 +574,7 @@ class DogDialog(BaseDialog):
         ttk.Button(left_button_frame, text=self.lang.get('leave_unknown_button'), command=self.save_unknown).pack(side=tk.LEFT, padx=5)
         ttk.Button(right_button_frame, text=self.lang.get('cancel_button'), command=self.cancel).pack(side=tk.RIGHT, padx=5)
         self.center_window()
+        self.start_countdown(timeout, self.save_unknown, self.lang)
 
     def check_dog_exists(self, name, breed, owner):
         if not self.db_path: return False, []
@@ -561,7 +602,7 @@ class DogDialog(BaseDialog):
     def cancel(self): self.result = None; self.destroy()
 
 class BodyWithoutFaceDialog(BaseDialog):
-    def __init__(self, parent, image, body_bbox, lang_manager, existing_persons=None, ref_persons=None, db_path=None):
+    def __init__(self, parent, image, body_bbox, lang_manager, existing_persons=None, ref_persons=None, db_path=None, timeout=0):
         super().__init__(parent); self.parent = parent; self.result = None; self.lang = lang_manager
         self.existing_persons = existing_persons or []; self.ref_persons = ref_persons or []; self.db_path = db_path
         self.title(self.lang.get('body_dialog_title')); self.resizable(True, True); self.transient(parent); self.grab_set(); self.protocol("WM_DELETE_WINDOW", self.skip)
@@ -599,6 +640,7 @@ class BodyWithoutFaceDialog(BaseDialog):
         ttk.Button(button_frame, text=self.lang.get('skip_button'), command=self.skip).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text=self.lang.get('cancel_button'), command=self.cancel).pack(side=tk.RIGHT, padx=5)
         self.center_window()
+        self.start_countdown(timeout, self.skip, self.lang)
     def save_info(self):
         try: active_tab_text = self.notebook.tab(self.notebook.select(), "text")
         except tk.TclError: active_tab_text = self.lang.get('enter_data_tab')
@@ -617,7 +659,7 @@ class BodyWithoutFaceDialog(BaseDialog):
     def cancel(self): self.result = None; self.destroy()
 
 class ConfirmPersonDialog(BaseDialog):
-    def __init__(self, parent, image, face_location, person_info, lang_manager):
+    def __init__(self, parent, image, face_location, person_info, lang_manager, timeout=0):
         super().__init__(parent); self.result = None; self.person_info = person_info; self.lang = lang_manager
         self.title(self.lang.get('confirm_dialog_title')); self.resizable(False, False); self.transient(parent); self.grab_set()
         self.protocol("WM_DELETE_WINDOW", self.reject)
@@ -635,6 +677,7 @@ class ConfirmPersonDialog(BaseDialog):
         ttk.Button(button_frame, text=self.lang.get('confirm_match_button'), command=self.confirm).pack(side=tk.LEFT, expand=True, padx=5)
         ttk.Button(button_frame, text=self.lang.get('reject_match_button'), command=self.reject).pack(side=tk.RIGHT, expand=True, padx=5)
         self.center_window()
+        self.start_countdown(timeout, self.reject, self.lang)
     def confirm(self): self.result = {'confirmed': True, 'person_info': self.person_info}; self.destroy()
     def reject(self): self.result = {'confirmed': False}; self.destroy()
 
@@ -669,6 +712,7 @@ class FaceDetectionV2:
         self.processing = False
         self.processed_mode = tk.StringVar(value="skip")
         self.auto_assign_unknown = tk.BooleanVar(value=False)
+        self.dialog_timeout = tk.IntVar(value=0)
         self.processed_decision_for_all = None
         self.db_path = None
         self.ref_db_path = None
@@ -751,6 +795,7 @@ class FaceDetectionV2:
             'ref_db_path': self.ref_db_path or '',
             'include_subdirs': self.include_subdirs.get(),
             'processed_mode': self.processed_mode.get(),
+            'dialog_timeout': self.dialog_timeout.get(),
         }
         try:
             with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
@@ -805,6 +850,8 @@ class FaceDetectionV2:
             self.include_subdirs.set(settings['include_subdirs'])
         if 'processed_mode' in settings:
             self.processed_mode.set(settings['processed_mode'])
+        if 'dialog_timeout' in settings:
+            self.dialog_timeout.set(settings['dialog_timeout'])
 
     def log(self, message):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -886,6 +933,8 @@ class FaceDetectionV2:
         self.repro_rb2.config(text=self.lang.get('reprocess_process'))
         self.repro_rb3.config(text=self.lang.get('reprocess_ask'))
         self.auto_unknown_cb.config(text=self.lang.get('auto_assign_unknown_check'))
+        self.timeout_lbl.config(text=self.lang.get('dialog_timeout_label'))
+        self.timeout_note_lbl.config(text=self.lang.get('dialog_timeout_note'))
         
         self.start_btn.config(text=self.lang.get('start_scan_button'))
         self.stop_btn.config(text=self.lang.get('stop_button'))
@@ -1079,6 +1128,10 @@ class FaceDetectionV2:
         self.repro_rb2 = ttk.Radiobutton(self.repro_frame, text=self.lang.get('reprocess_process'), variable=self.processed_mode, value="process"); self.repro_rb2.pack(anchor=tk.W)
         self.repro_rb3 = ttk.Radiobutton(self.repro_frame, text=self.lang.get('reprocess_ask'), variable=self.processed_mode, value="ask"); self.repro_rb3.pack(anchor=tk.W)
         self.auto_unknown_cb = ttk.Checkbutton(self.repro_frame, text=self.lang.get('auto_assign_unknown_check'), variable=self.auto_assign_unknown); self.auto_unknown_cb.pack(anchor=tk.W, pady=(5, 0))
+        timeout_row = ttk.Frame(self.repro_frame); timeout_row.pack(anchor=tk.W, pady=(5, 0))
+        self.timeout_lbl = ttk.Label(timeout_row, text=self.lang.get('dialog_timeout_label')); self.timeout_lbl.pack(side=tk.LEFT)
+        self.timeout_spin = ttk.Spinbox(timeout_row, from_=0, to=300, width=5, textvariable=self.dialog_timeout); self.timeout_spin.pack(side=tk.LEFT, padx=5)
+        self.timeout_note_lbl = ttk.Label(timeout_row, text=self.lang.get('dialog_timeout_note'), font=('Arial', 9, 'italic')); self.timeout_note_lbl.pack(side=tk.LEFT)
 
         control_frame = ttk.Frame(parent, padding="10"); control_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=5)
         self.start_btn = ttk.Button(control_frame, text=self.lang.get('start_scan_button'), command=self.start_processing, state=tk.DISABLED); self.start_btn.pack(side=tk.LEFT, padx=5)
@@ -1512,29 +1565,29 @@ class FaceDetectionV2:
     def show_person_dialog_main(self, data):
         image, face_location, face_encoding, callback = data
         ref_persons = self.get_existing_persons(self.ref_db_path) if self.ref_db_path else []
-        dialog = PersonDialog(self.root, image, face_location, self.lang, self.get_existing_persons(), ref_persons, self.db_path)
+        dialog = PersonDialog(self.root, image, face_location, self.lang, self.get_existing_persons(), ref_persons, self.db_path, timeout=self.dialog_timeout.get())
         self.root.wait_window(dialog); callback(dialog.result)
 
     def show_dog_dialog_main(self, data):
         image, dog_bbox, callback, breed = data
         ref_dogs = self.get_existing_dogs(self.ref_db_path) if self.ref_db_path else []
-        dialog = DogDialog(self.root, image, dog_bbox, self.lang, self.get_existing_dogs(), ref_dogs, self.db_path, breed=breed)
+        dialog = DogDialog(self.root, image, dog_bbox, self.lang, self.get_existing_dogs(), ref_dogs, self.db_path, breed=breed, timeout=self.dialog_timeout.get())
         self.root.wait_window(dialog); callback(dialog.result)
 
     def show_body_dialog_main(self, data):
         image, body_bbox, callback = data
         existing_persons = self.get_existing_persons(); ref_persons = self.get_existing_persons(db_path=self.ref_db_path) if self.ref_db_path else []
-        dialog = BodyWithoutFaceDialog(self.root, image, body_bbox, self.lang, existing_persons, ref_persons, self.db_path)
+        dialog = BodyWithoutFaceDialog(self.root, image, body_bbox, self.lang, existing_persons, ref_persons, self.db_path, timeout=self.dialog_timeout.get())
         self.root.wait_window(dialog); callback(dialog.result)
     
     def show_confirm_person_dialog_main(self, data):
         image, face_location, person_info, callback = data
-        dialog = ConfirmPersonDialog(self.root, image, face_location, person_info, self.lang)
+        dialog = ConfirmPersonDialog(self.root, image, face_location, person_info, self.lang, timeout=self.dialog_timeout.get())
         self.root.wait_window(dialog); callback(dialog.result)
 
     def show_processed_dialog_main(self, data):
         image_path, callback = data
-        dialog = ProcessedImageDialog(self.root, image_path, self.lang)
+        dialog = ProcessedImageDialog(self.root, image_path, self.lang, timeout=self.dialog_timeout.get())
         self.root.wait_window(dialog); callback(dialog.result, dialog.apply_to_all)
 
     def create_or_update_person(self, result, conn):
